@@ -23,7 +23,7 @@ jobs:
 
   setup:
     needs: tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 360
     env:
       APP_ENV: production
@@ -34,8 +34,8 @@ jobs:
       MARKET_DATA_API_KEY: ${{ secrets.MARKET_DATA_API_KEY }}
       MODEL_STORAGE: ${{ vars.MODEL_STORAGE || 'auto' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip

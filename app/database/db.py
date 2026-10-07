@@ -7,6 +7,8 @@ Keputusan desain: lapisan tipis di atas DB-API (sqlite3 / psycopg 3), bukan ORM.
 """
 from __future__ import annotations
 
+import datetime
+import decimal
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -41,6 +43,12 @@ def _py(v):
         return None if pd.isna(v) else (v.strftime("%Y-%m-%d") if v == v.normalize() else v.isoformat())
     if v is pd.NaT:
         return None
+    if isinstance(v, datetime.datetime):  # PostgreSQL mengembalikan objek tanggal; SQLite mengembalikan teks
+        return v.isoformat()
+    if isinstance(v, datetime.date):
+        return v.isoformat()
+    if isinstance(v, decimal.Decimal):
+        return float(v)
     return v
 
 

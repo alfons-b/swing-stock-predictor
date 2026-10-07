@@ -27,7 +27,7 @@ jobs:
 
   daily:
     needs: tests        # kode yang gagal test tidak dijalankan di production
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
       APP_ENV: production
@@ -43,8 +43,8 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       NOTIFY_WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -60,7 +60,7 @@ jobs:
           if [ -n "$f" ]; then cat "$f" >> "$GITHUB_STEP_SUMMARY"; else echo "Tidak ada report (lihat log)." >> "$GITHUB_STEP_SUMMARY"; fi
       - name: Upload report (salinan; sumber utama ada di database/cloud storage)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: daily-report-${{ github.run_id }}
           path: |
