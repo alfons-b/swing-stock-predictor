@@ -58,10 +58,45 @@ Secrets tidak pernah ditulis ke file, report, log, atau Docker image. Fungsi `de
 
 ### 1.4 Konfigurasi data provider
 
-Default-nya **Yahoo Finance** (`config/sources.yaml`), dengan fallback ke CSV. Ada dua batasan yang perlu Anda ketahui:
+Ada tiga jenis data yang dibutuhkan, dan sumbernya berbeda-beda:
 
-- **Universe.** Yahoo tidak menyediakan daftar emiten BEI. Sistem mencoba endpoint publik situs BEI, yang sering diblokir dari IP datacenter. Bila gagal, sistem memakai `config/universe.csv`. File itu baru berisi beberapa kode saham besar sebagai **contoh**. **Ganti dengan daftar lengkap** hasil ekspor dari idx.co.id (*Data Pasar → Daftar Saham*). Kolom yang dipakai: `ticker,name,sector,subsector,listing_date,delisting_date,board`.
-- **Emiten delisting.** Emiten yang sudah delisting biasanya hilang dari Yahoo, sehingga ada survivorship bias, dan validator akan memperingatkannya. Data berlisensi bisa dipakai lewat `IDXProvider` (siapkan `MARKET_DATA_API_KEY` dan implementasikan `_fetch_prices`), atau diekspor ke CSV standar untuk `CSVProvider`.
+| Data | Sumber default | Yang perlu Anda lakukan |
+|---|---|---|
+| **Daftar emiten (universe)** | File unduhan BEI | Unduh sekali, taruh di repo (lihat di bawah) |
+| **Harga harian + IHSG** | Yahoo Finance (`BBCA.JK`, `^JKSE`) | Tidak ada; otomatis |
+| **Sektor/subsektor** | Yahoo (taksonomi Yahoo), terisi bertahap | Opsional: file sektor sendiri |
+
+**Daftar emiten — pakai file BEI apa adanya.**
+
+1. Buka idx.co.id → *Data Pasar → Data Saham → Daftar Saham*, lalu unduh (Excel).
+2. Simpan sebagai `config/universe.xlsx`. Tidak perlu mengubah kolom: `No | Kode | Nama Perusahaan | Tanggal Pencatatan | Saham | Papan Pencatatan` dikenali otomatis, termasuk tanggal berformat Indonesia ("31 Mei 2000"), angka bertitik ("123.275.050.000"), dan baris judul di atas tabel.
+3. Di `config/sources.yaml`, ubah `universe.file: config/universe.xlsx`.
+4. Commit file itu. Perbarui sebulan sekali (atau saat ada IPO baru yang ingin Anda ikuti), lalu commit lagi.
+
+Pemetaan kolom:
+
+| Kolom BEI | Dipakai sebagai |
+|---|---|
+| Kode | `ticker` (wajib) |
+| Nama Perusahaan | `name` |
+| Tanggal Pencatatan | `listing_date`, untuk mendeteksi IPO baru |
+| Saham | `listed_shares`, jumlah saham tercatat |
+| Papan Pencatatan | `board` |
+| No | diabaikan |
+
+Format internal lama (`ticker,name,sector,...`) tetap diterima. Satu-satunya kolom wajib adalah kode saham.
+
+**Emiten yang hilang dari daftar** (delisting) otomatis ditandai `is_active = false`; historinya tidak dihapus. Bila daftar baru tiba-tiba kurang dari setengah jumlah emiten aktif (misalnya file terpotong), penonaktifan ditunda dan dicatat sebagai peringatan.
+
+**Sektor.** Daftar Saham BEI tidak memuat sektor. Ada dua pilihan:
+- *Tanpa usaha:* sistem mengisi sektor dari Yahoo, sekitar 40 emiten per run, sehingga seluruh universe terisi dalam beberapa minggu. Taksonominya Yahoo (mis. "Financial Services"), bukan IDX-IC.
+- *Lebih akurat:* buat file berisi kolom `Kode`, `Sektor`, `Subsektor` (misalnya dari halaman klasifikasi industri/profil perusahaan di idx.co.id), simpan sebagai `config/sectors.csv`, lalu set `universe.sectors_file: config/sectors.csv`. Nilai dari file ini mengalahkan Yahoo.
+
+Selama sektor belum terisi, emiten dikelompokkan sebagai "Unknown" untuk perhitungan sector strength.
+
+**Endpoint universe BEI otomatis.** Sistem tetap mencoba endpoint publik situs BEI lebih dulu, tetapi endpoint itu hampir selalu memblokir IP datacenter seperti runner GitHub Actions. Karena itu file di atas adalah jalur yang bisa diandalkan.
+
+**Harga.** Yahoo tidak menyediakan data emiten yang sudah delisting, jadi ada survivorship bias, dan validator akan memperingatkannya. Data berlisensi bisa dipakai lewat `IDXProvider` (siapkan `MARKET_DATA_API_KEY` dan implementasikan `_fetch_prices`), atau diekspor ke CSV standar untuk `CSVProvider`.
 
 Isi juga `config/holidays.yaml` dengan hari libur bursa dari kalender resmi BEI. Sistem tidak mengarang tanggal libur. Selain itu, hari kerja tanpa data IHSG otomatis dipelajari sebagai hari non-bursa.
 

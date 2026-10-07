@@ -21,21 +21,34 @@ class UniverseManager:
     def __init__(self, cfg: dict, repo: Repository, chain):
         self.cfg, self.repo, self.chain = cfg, repo, chain
 
+    def _file_universe(self) -> tuple[pd.DataFrame, str] | None:
+        """File daftar emiten (unduhan BEI .xlsx/.csv apa adanya, atau format internal)."""
+        from app.data.universe_file import apply_sectors, load_universe_file
+        p = resolve_path(self.cfg, get(self.cfg, "universe.file", "config/universe.csv"))
+        if not p.exists():
+            return None
+        u = load_universe_file(p)
+        if u.attrs.get("invalid_rows"):
+            log.warning("Universe %s: %d baris kode tidak valid dilewati (mis. %s)", p.name,
+                        len(u.attrs["invalid_rows"]), ", ".join(u.attrs["invalid_rows"][:5]))
+        sp = get(self.cfg, "universe.sectors_file")
+        u = apply_sectors(u, resolve_path(self.cfg, sp) if sp else None)
+        return u, f"file:{p.name}"
+
     def fetch_universe(self) -> tuple[pd.DataFrame, str]:
+        primary = self.chain.providers[0] if self.chain.providers else None
         for src in get(self.cfg, "universe.sources", ["idx", "csv_file"]):
             if src == "csv_file":
-                p = resolve_path(self.cfg, get(self.cfg, "universe.file", "config/universe.csv"))
-                # provider CSV (data contoh / feed ekspor) punya universe sendiri yang lebih lengkap
-                for prov in self.chain.providers:
-                    if prov.type == "csv":
-                        try:
-                            return prov.get_universe(), prov.name
-                        except Exception:
-                            pass
-                if p.exists():
-                    u = pd.read_csv(p, dtype=str)
-                    u["ticker"] = u["ticker"].map(normalize_ticker)
-                    return conform_universe(u), f"file:{p.name}"
+                # Mode offline/dev: provider CSV adalah sumber UTAMA → pakai universe miliknya (konsisten dengan harganya).
+                # Bila CSV hanya fallback (production: Yahoo/IDX utama), daftar emiten diambil dari universe.file.
+                if primary is not None and primary.type == "csv":
+                    try:
+                        return primary.get_universe(), primary.name
+                    except Exception as e:
+                        log.warning("Universe dari %s gagal: %s", primary.name, e)
+                r = self._file_universe()
+                if r is not None:
+                    return r
                 continue
             for prov in self.chain.providers:
                 if prov.type == src:
@@ -49,7 +62,8 @@ class UniverseManager:
                     return IDXProvider({"name": "idx_public"}, self.cfg).get_universe(), "idx_public"
                 except Exception as e:
                     log.warning("Universe BEI publik gagal: %s", e)
-        raise RuntimeError("Universe tidak bisa diambil dari sumber mana pun")
+        raise RuntimeError("Universe tidak bisa diambil dari sumber mana pun — unduh daftar saham dari idx.co.id "
+                           "lalu simpan sebagai config/universe.xlsx (atau .csv) dan set universe.file")
 
     def apply_ticker_changes(self) -> list[str]:
         p = resolve_path(self.cfg, get(self.cfg, "universe.ticker_changes_file", "config/ticker_changes.yaml"))
@@ -74,9 +88,19 @@ class UniverseManager:
         # jangan timpa metadata yang sudah ada dengan nilai kosong
         if len(existing):
             ex = existing.set_index("ticker")
-            for col in ("name", "sector", "subsector", "board"):
+            if "listed_shares" not in fresh:
+                fresh["listed_shares"] = float("nan")
+            for col in ("name", "sector", "subsector", "board", "listed_shares"):
+                if col not in ex:
+                    continue
+                if col == "listed_shares":  # numerik: hanya isi bila kosong; jangan bandingkan sebagai teks
+                    fresh[col] = pd.to_numeric(fresh[col], errors="coerce")
+                    old = pd.to_numeric(fresh["ticker"].map(ex[col]), errors="coerce")
+                    fresh[col] = fresh[col].fillna(old)
+                    continue
+                fresh[col] = fresh[col].astype(object)
                 blank = fresh[col].isna() | fresh[col].isin(["", "Unknown"]) | (fresh[col].astype(str) == fresh["ticker"])
-                fresh.loc[blank, col] = fresh.loc[blank, "ticker"].map(ex[col]) if col in ex else None
+                fresh.loc[blank, col] = fresh.loc[blank, "ticker"].map(ex[col])
         for c in ("listing_date", "delisting_date"):
             fresh[c] = pd.to_datetime(fresh[c]).dt.strftime("%Y-%m-%d").where(fresh[c].notna(), None)
         new = sorted(set(fresh["ticker"]) - set(existing["ticker"])) if len(existing) else sorted(fresh["ticker"])

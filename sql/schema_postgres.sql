@@ -12,15 +12,12 @@ CREATE TABLE IF NOT EXISTS stocks (
   delisting_date DATE,
   is_active BOOLEAN NOT NULL,
   previous_ticker TEXT,
+  listed_shares DOUBLE PRECISION,
   first_seen TIMESTAMPTZ,
   last_seen TIMESTAMPTZ,
   updated_at TIMESTAMPTZ,
   UNIQUE (ticker)
 );
-
-CREATE INDEX IF NOT EXISTS ix_stocks_is_active ON stocks (is_active);
-
-CREATE INDEX IF NOT EXISTS ix_stocks_sector ON stocks (sector);
 
 CREATE TABLE IF NOT EXISTS price_history (
   id BIGSERIAL PRIMARY KEY,
@@ -39,8 +36,6 @@ CREATE TABLE IF NOT EXISTS price_history (
   UNIQUE (stock_id, date)
 );
 
-CREATE INDEX IF NOT EXISTS ix_price_history_date ON price_history (date);
-
 CREATE TABLE IF NOT EXISTS corporate_actions (
   id BIGSERIAL PRIMARY KEY,
   stock_id BIGINT NOT NULL REFERENCES stocks(id),
@@ -52,8 +47,6 @@ CREATE TABLE IF NOT EXISTS corporate_actions (
   processed_at TIMESTAMPTZ,
   UNIQUE (stock_id, ex_date, action)
 );
-
-CREATE INDEX IF NOT EXISTS ix_corporate_actions_ex_date ON corporate_actions (ex_date);
 
 CREATE TABLE IF NOT EXISTS market_index (
   id BIGSERIAL PRIMARY KEY,
@@ -68,8 +61,6 @@ CREATE TABLE IF NOT EXISTS market_index (
   ingested_at TIMESTAMPTZ,
   UNIQUE (symbol, date)
 );
-
-CREATE INDEX IF NOT EXISTS ix_market_index_date ON market_index (date);
 
 CREATE TABLE IF NOT EXISTS sector_data (
   id BIGSERIAL PRIMARY KEY,
@@ -87,8 +78,6 @@ CREATE TABLE IF NOT EXISTS sector_data (
   UNIQUE (date, sector)
 );
 
-CREATE INDEX IF NOT EXISTS ix_sector_data_date ON sector_data (date);
-
 CREATE TABLE IF NOT EXISTS features (
   id BIGSERIAL PRIMARY KEY,
   stock_id BIGINT NOT NULL REFERENCES stocks(id),
@@ -97,8 +86,6 @@ CREATE TABLE IF NOT EXISTS features (
   payload TEXT,
   UNIQUE (stock_id, date, feature_version)
 );
-
-CREATE INDEX IF NOT EXISTS ix_features_date ON features (date);
 
 CREATE TABLE IF NOT EXISTS predictions (
   id BIGSERIAL PRIMARY KEY,
@@ -137,12 +124,6 @@ CREATE TABLE IF NOT EXISTS predictions (
   created_at TIMESTAMPTZ,
   UNIQUE (prediction_date, stock_id, model_version)
 );
-
-CREATE INDEX IF NOT EXISTS ix_predictions_ticker ON predictions (ticker);
-
-CREATE INDEX IF NOT EXISTS ix_predictions_decision ON predictions (decision);
-
-CREATE INDEX IF NOT EXISTS ix_predictions_model_version ON predictions (model_version);
 
 CREATE TABLE IF NOT EXISTS prediction_evaluations (
   id BIGSERIAL PRIMARY KEY,
@@ -188,8 +169,6 @@ CREATE TABLE IF NOT EXISTS trading_signals (
   UNIQUE (signal_date, stock_id)
 );
 
-CREATE INDEX IF NOT EXISTS ix_trading_signals_signal_date ON trading_signals (signal_date);
-
 CREATE TABLE IF NOT EXISTS backtest_runs (
   id BIGSERIAL PRIMARY KEY,
   run_id TEXT NOT NULL,
@@ -204,8 +183,6 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
   status TEXT,
   UNIQUE (run_id)
 );
-
-CREATE INDEX IF NOT EXISTS ix_backtest_runs_created_at ON backtest_runs (created_at);
 
 CREATE TABLE IF NOT EXISTS backtest_trades (
   id BIGSERIAL PRIMARY KEY,
@@ -224,8 +201,6 @@ CREATE TABLE IF NOT EXISTS backtest_trades (
   fees DOUBLE PRECISION,
   UNIQUE (backtest_run_id, ticker, entry_date)
 );
-
-CREATE INDEX IF NOT EXISTS ix_backtest_trades_backtest_run_id ON backtest_trades (backtest_run_id);
 
 CREATE TABLE IF NOT EXISTS model_versions (
   id BIGSERIAL PRIMARY KEY,
@@ -248,8 +223,6 @@ CREATE TABLE IF NOT EXISTS model_versions (
   UNIQUE (version)
 );
 
-CREATE INDEX IF NOT EXISTS ix_model_versions_status ON model_versions (status);
-
 CREATE TABLE IF NOT EXISTS pipeline_runs (
   id BIGSERIAL PRIMARY KEY,
   run_id TEXT NOT NULL,
@@ -270,8 +243,6 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
   created_at TIMESTAMPTZ,
   UNIQUE (run_id)
 );
-
-CREATE INDEX IF NOT EXISTS ix_pipeline_runs_run_type_started_at ON pipeline_runs (run_type, started_at);
 
 CREATE TABLE IF NOT EXISTS data_sources (
   id BIGSERIAL PRIMARY KEY,
@@ -295,10 +266,6 @@ CREATE TABLE IF NOT EXISTS system_logs (
   message TEXT
 );
 
-CREATE INDEX IF NOT EXISTS ix_system_logs_run_id ON system_logs (run_id);
-
-CREATE INDEX IF NOT EXISTS ix_system_logs_ts ON system_logs (ts);
-
 CREATE TABLE IF NOT EXISTS reports (
   id BIGSERIAL PRIMARY KEY,
   report_date DATE NOT NULL,
@@ -313,9 +280,43 @@ CREATE TABLE IF NOT EXISTS reports (
   UNIQUE (report_date, kind, filename)
 );
 
-CREATE INDEX IF NOT EXISTS ix_reports_report_date ON reports (report_date);
-
 CREATE TABLE IF NOT EXISTS schema_migrations (
   version BIGINT PRIMARY KEY,
   applied_at TIMESTAMPTZ
 );
+
+CREATE INDEX IF NOT EXISTS ix_stocks_is_active ON stocks (is_active);
+
+CREATE INDEX IF NOT EXISTS ix_stocks_sector ON stocks (sector);
+
+CREATE INDEX IF NOT EXISTS ix_price_history_date ON price_history (date);
+
+CREATE INDEX IF NOT EXISTS ix_corporate_actions_ex_date ON corporate_actions (ex_date);
+
+CREATE INDEX IF NOT EXISTS ix_market_index_date ON market_index (date);
+
+CREATE INDEX IF NOT EXISTS ix_sector_data_date ON sector_data (date);
+
+CREATE INDEX IF NOT EXISTS ix_features_date ON features (date);
+
+CREATE INDEX IF NOT EXISTS ix_predictions_ticker ON predictions (ticker);
+
+CREATE INDEX IF NOT EXISTS ix_predictions_decision ON predictions (decision);
+
+CREATE INDEX IF NOT EXISTS ix_predictions_model_version ON predictions (model_version);
+
+CREATE INDEX IF NOT EXISTS ix_trading_signals_signal_date ON trading_signals (signal_date);
+
+CREATE INDEX IF NOT EXISTS ix_backtest_runs_created_at ON backtest_runs (created_at);
+
+CREATE INDEX IF NOT EXISTS ix_backtest_trades_backtest_run_id ON backtest_trades (backtest_run_id);
+
+CREATE INDEX IF NOT EXISTS ix_model_versions_status ON model_versions (status);
+
+CREATE INDEX IF NOT EXISTS ix_pipeline_runs_run_type_started_at ON pipeline_runs (run_type, started_at);
+
+CREATE INDEX IF NOT EXISTS ix_system_logs_run_id ON system_logs (run_id);
+
+CREATE INDEX IF NOT EXISTS ix_system_logs_ts ON system_logs (ts);
+
+CREATE INDEX IF NOT EXISTS ix_reports_report_date ON reports (report_date);

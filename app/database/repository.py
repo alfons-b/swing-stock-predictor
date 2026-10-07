@@ -34,7 +34,7 @@ class Repository:
 
     def upsert_stocks(self, df: pd.DataFrame) -> tuple[int, int]:
         cols = ["ticker", "name", "sector", "subsector", "board", "listing_date", "delisting_date", "is_active",
-                "previous_ticker", "first_seen", "last_seen", "updated_at"]
+                "previous_ticker", "listed_shares", "first_seen", "last_seen", "updated_at"]
         d = df.reindex(columns=cols)
         return self.db.upsert("stocks", d, keys=["ticker"],
                               update=[c for c in cols if c not in ("first_seen", "previous_ticker")])

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from app.database.db import Database
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 TYPES = {
     "sqlite": {"ID": "INTEGER PRIMARY KEY AUTOINCREMENT", "TEXT": "TEXT", "INT": "INTEGER", "REAL": "REAL",
@@ -23,7 +23,7 @@ TYPES = {
 TABLES = [
     ("stocks", [("id", "ID", ""), ("ticker", "TEXT", "NOT NULL"), ("name", "TEXT", ""), ("sector", "TEXT", ""),
                 ("subsector", "TEXT", ""), ("board", "TEXT", ""), ("listing_date", "DATE", ""),
-                ("delisting_date", "DATE", ""), ("is_active", "BOOL", "NOT NULL"), ("previous_ticker", "TEXT", ""),
+                ("delisting_date", "DATE", ""), ("is_active", "BOOL", "NOT NULL"), ("previous_ticker", "TEXT", ""), ("listed_shares", "REAL", ""),
                 ("first_seen", "TS", ""), ("last_seen", "TS", ""), ("updated_at", "TS", "")],
      [["ticker"]], [["is_active"], ["sector"]]),
     ("price_history", [("id", "ID", ""), ("stock_id", "INT", "NOT NULL REFERENCES stocks(id)"), ("date", "DATE", "NOT NULL"),
@@ -109,24 +109,46 @@ TABLES = [
 TABLE_NAMES = [t[0] for t in TABLES]
 
 
-def render_ddl(dialect: str) -> list[str]:
+def render_ddl(dialect: str, part: str = "all") -> list[str]:
+    """part: tables | indexes | all. Index dibuat setelah kolom baru ditambahkan (migrasi DB lama)."""
     types = TYPES[dialect]
-    out = []
-    for name, cols, uniques, indexes in TABLES:
+    tables, indexes = [], []
+    for name, cols, uniques, index_cols in TABLES:
         defs = [f"{c} {types[t]} {cons}".strip() for c, t, cons in cols]
         for u in uniques:
             defs.append(f"UNIQUE ({', '.join(u)})")
-        out.append(f"CREATE TABLE IF NOT EXISTS {name} (\n  " + ",\n  ".join(defs) + "\n)")
-        for idx in indexes:
-            out.append(f"CREATE INDEX IF NOT EXISTS ix_{name}_{'_'.join(idx)} ON {name} ({', '.join(idx)})")
-    return out
+        tables.append(f"CREATE TABLE IF NOT EXISTS {name} (\n  " + ",\n  ".join(defs) + "\n)")
+        for idx in index_cols:
+            indexes.append(f"CREATE INDEX IF NOT EXISTS ix_{name}_{'_'.join(idx)} ON {name} ({', '.join(idx)})")
+    return {"tables": tables, "indexes": indexes, "all": tables + indexes}[part]
+
+
+def existing_columns(db: Database, table: str) -> set[str]:
+    if db.dialect == "sqlite":
+        return {r[1] for r in db.query(f"PRAGMA table_info({table})")}
+    return {r[0] for r in db.query("SELECT column_name FROM information_schema.columns WHERE table_name = ? "
+                                   "AND table_schema = current_schema()", (table,))}
+
+
+def add_missing_columns(db: Database) -> list[str]:
+    """Migrasi additive: kolom baru di TABLES ditambahkan ke tabel lama (data tidak disentuh)."""
+    types, added = TYPES[db.dialect], []
+    for name, cols, _, _ in TABLES:
+        have = existing_columns(db, name)
+        for c, t, _cons in cols:
+            if c not in have and t != "ID":
+                db.execute(f"ALTER TABLE {name} ADD COLUMN {c} {types[t]}")
+                added.append(f"{name}.{c}")
+    return added
 
 
 def migrate(db: Database) -> int:
-    """Buat tabel yang belum ada. Aman dijalankan berulang (setiap run daily memanggilnya)."""
-    db.executescript(render_ddl(db.dialect))
+    """Buat tabel yang belum ada + tambahkan kolom baru. Aman dijalankan berulang (setiap run daily memanggilnya)."""
+    db.executescript(render_ddl(db.dialect, "tables"))
+    add_missing_columns(db)
+    db.executescript(render_ddl(db.dialect, "indexes"))
     current = db.scalar("SELECT MAX(version) FROM schema_migrations") or 0
-    if current < SCHEMA_VERSION:
+    if current < SCHEMA_VERSION:  # catat versi; perubahan skema sendiri sudah additive di atas
         from datetime import datetime, timezone
         db.execute("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
                    (SCHEMA_VERSION, datetime.now(timezone.utc).isoformat(timespec="seconds")))
