@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ruff
-      - name: Ruff (error nyata saja: syntax, nama tak terdefinisi, import rusak)
+      - name: "Ruff - error nyata saja (syntax, nama tak terdefinisi, import rusak)"
         run: ruff check --select E9,F63,F7,F82 .
       - name: Compile semua modul
         run: python -m compileall -q app dashboard main.py
