@@ -1,0 +1,29 @@
+# Provider dicoba berurutan berdasarkan priority; gagal → fallback ke provider berikutnya.
+market_data:
+  retry:
+    attempts: 3
+    backoff_seconds: 2           # 2s, 4s, 8s ...
+  batch_size: 50
+  providers:
+    - name: yahoo_finance
+      type: yahoo
+      enabled: ${YAHOO_ENABLED:-true}
+      priority: 1
+      suffix: ".JK"
+      index_symbol: "^JKSE"
+    - name: idx
+      type: idx                  # universe dari situs BEI; harga butuh feed berlisensi (lihat README)
+      enabled: false
+      priority: 2
+      api_key: ${MARKET_DATA_API_KEY:-}
+    - name: csv
+      type: csv
+      enabled: true
+      priority: 99
+      dir: ${CSV_DATA_DIR:-data/raw/sample}
+
+universe:
+  sources: [idx, csv_file]       # idx = endpoint publik BEI (sering diblokir dari datacenter) → fallback file
+  file: config/universe.csv
+  ticker_changes_file: config/ticker_changes.yaml
+  min_ratio_to_deactivate: 0.5   # tolak deaktivasi massal bila daftar baru < 50% jumlah aktif (respons parsial)

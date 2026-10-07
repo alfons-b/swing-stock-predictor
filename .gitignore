@@ -1,0 +1,12 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+data/local.db*
+data/cache/
+data/output/*
+data/processed/*
+models/*.joblib
+reports/*
+!**/.gitkeep
+.streamlit/secrets.toml

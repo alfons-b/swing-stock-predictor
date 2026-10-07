@@ -1,0 +1,12 @@
+# Opsi hosting dashboard di Render (web service). Daily job TETAP di GitHub Actions.
+services:
+  - type: web
+    name: swing-dashboard
+    runtime: docker
+    dockerfilePath: ./Dockerfile.dashboard
+    plan: free
+    envVars:
+      - key: DATABASE_URL
+        sync: false            # isi di dashboard Render (gunakan user read-only Supabase bila memungkinkan)
+      - key: APP_ENV
+        value: production

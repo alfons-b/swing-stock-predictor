@@ -1,0 +1,64 @@
+# Konfigurasi aplikasi. Nilai ${VAR:-default} diambil dari environment variable.
+environment: ${APP_ENV:-development}          # development | production
+
+project:
+  seed: 42
+  cache_dir: data/cache                         # cache lokal/runner (boleh hilang kapan saja)
+  log_level: ${LOG_LEVEL:-INFO}
+
+database:
+  # Production: DATABASE_URL = postgresql://... (Supabase, dari GitHub Secrets)
+  # Development/test: sqlite:///data/local.db
+  url: ${DATABASE_URL:-sqlite:///data/local.db}
+  batch_size: 2000
+
+storage:
+  model_backend: ${MODEL_STORAGE:-auto}        # auto | local | database | supabase
+  report_backend: ${REPORT_STORAGE:-auto}      # auto | local | database | supabase
+  local_model_dir: models
+  local_report_dir: reports
+  local_output_dir: data/output
+  supabase_bucket: ${SUPABASE_BUCKET:-swing-artifacts}
+  # auto = database bila DATABASE_URL Postgres (persisten di Supabase), local bila SQLite
+
+calendar:
+  timezone: Asia/Jakarta
+  data_ready_time: "17:30"                     # setelah jam ini data hari bursa dianggap tersedia
+  holidays_file: config/holidays.yaml
+  stale_after_trading_days: 2                  # DB tertinggal > N hari bursa dari ekspektasi = STALE
+
+scheduler:                                     # HANYA konfigurasi cloud workflow (GitHub Actions), bukan scheduler lokal
+  enabled: true
+  timezone: Asia/Jakarta
+  daily_cron_utc: "30 11 * * 1-5"              # 18:30 WIB, Senin–Jumat (salin ke .github/workflows/daily.yml)
+  retrain_cron_utc: "0 23 * * 6"               # Minggu 06:00 WIB
+  backtest_cron_utc: "0 1 * * 0"               # Minggu 08:00 WIB
+
+pipeline:
+  scan_lookback_trading_days: 520              # daily hanya memuat ~2 tahun terakhir (cukup untuk SMA200 + 60D)
+  features_snapshot_days: 5                    # tabel features hanya menyimpan snapshot terbaru (hemat storage Supabase)
+  max_failed_ticker_ratio: 0.5                 # > 50% ticker gagal → FAILED (bukan PARTIAL_SUCCESS)
+  require_active_model: true
+
+data:
+  incremental: true
+  initial_history_years: 10
+  start_date: null                             # null = hari ini - initial_history_years
+  index_id: COMPOSITE
+  overlap_days: 0                              # 0 = hanya tanggal yang hilang
+  refetch_on_split: true                       # provider split-adjusted (Yahoo): unduh ulang histori bila ada split baru
+
+quality:
+  max_abs_daily_return: 0.35
+  suspension_min_zero_volume_days: 3
+  min_history_days: 250
+  adjust_dividends: false
+  min_price: 50
+
+liquidity:
+  window: 20
+  MIN_AVG_TRADING_VALUE: 5000000000
+  MIN_MEDIAN_TRADING_VALUE: 3000000000
+  MIN_AVG_VOLUME: 500000
+  MIN_ACTIVE_TRADING_DAYS: 18
+  MAX_POSITION_PCT_OF_ADV: 0.05

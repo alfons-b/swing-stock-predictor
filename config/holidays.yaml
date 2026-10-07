@@ -1,0 +1,4 @@
+# Hari libur bursa BEI (tanggal YYYY-MM-DD). WAJIB diperbarui setiap tahun dari kalender resmi BEI
+# (idx.co.id → Kalender Bursa). Sengaja tidak diisi otomatis agar tidak ada tanggal karangan.
+# Tambahan: hari kerja tanpa data IHSG di database otomatis dipelajari sebagai hari non-bursa.
+holidays: []

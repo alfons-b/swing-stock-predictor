@@ -1,0 +1,47 @@
+# First run (§66): inisialisasi database, universe, histori, validasi, fitur, model awal, backtest.
+# Jalankan SEKALI secara manual setelah secrets diset. Idempoten — aman diulang.
+name: Initial Setup
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_backtest:
+        description: "Lewati backtest awal (lebih cepat)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: market-pipeline
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    uses: ./.github/workflows/tests.yml
+
+  setup:
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      APP_ENV: production
+      TZ: Asia/Jakarta
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      MARKET_DATA_API_KEY: ${{ secrets.MARKET_DATA_API_KEY }}
+      MODEL_STORAGE: ${{ vars.MODEL_STORAGE || 'auto' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python main.py health --no-provider
+      - run: python main.py setup ${{ inputs.skip_backtest && '--skip-backtest' || '' }}
+      - name: Status akhir
+        if: always()
+        run: python main.py health | tee -a "$GITHUB_STEP_SUMMARY"
