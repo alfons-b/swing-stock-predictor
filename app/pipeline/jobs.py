@@ -270,6 +270,32 @@ def job_evaluate(ctx: AppContext) -> dict:
         return out
 
 
+def check_history_window(ctx: AppContext, estimate: bool) -> None:
+    """Pastikan histori cukup untuk walk-forward SEBELUM pekerjaan berat.
+
+    estimate=True : sebelum mengunduh — kalender diperkirakan (~242 hari bursa/tahun) dari config.
+    estimate=False: sesudah mengunduh — memakai tanggal IHSG yang benar-benar ada di database.
+    """
+    import numpy as np
+
+    from app.backtest.walk_forward import SplitError, assert_feasible
+    from app.data.ingestion import initial_start
+    sym = get(ctx.cfg, "data.index_id", "COMPOSITE")
+    if estimate:
+        start = initial_start(ctx.cfg, ctx.calendar)
+        first_db = ctx.repo.min_index_date(sym)
+        if first_db is not None:
+            start = min(start, first_db)
+        d = pd.bdate_range(start, ctx.calendar.expected_latest_market_date())
+        dates = pd.Series(d[np.arange(len(d)) % 14 != 0])
+    else:
+        dates = pd.Series(ctx.repo.index_dates(sym))
+    try:
+        assert_feasible(dates, ctx.cfg)
+    except SplitError as e:
+        raise PipelineAbort(str(e) + (" (diperiksa sebelum mengunduh data)" if estimate else "")) from None
+
+
 def job_setup(ctx: AppContext, skip_backtest: bool = False) -> dict:
     """First initialization (§11, §66). Idempoten: aman dijalankan ulang."""
     out = {}
@@ -277,8 +303,10 @@ def job_setup(ctx: AppContext, skip_backtest: bool = False) -> dict:
     if env:
         raise PipelineAbort("Environment tidak valid: " + "; ".join(env))
     ctx.db.scalar("SELECT 1")
+    check_history_window(ctx, estimate=True)
     with PipelineRun(ctx, "setup") as run:
         out["ingest"] = _ingest(ctx, run, full_actions=True)
+        check_history_window(ctx, estimate=False)
         run.stats["summary"] = {"ingestion": {k: v for k, v in out["ingest"]["ingestion"].items() if k != "failed"}}
     out["validation"] = job_validate(ctx)[["check", "severity", "count"]].to_dict(orient="records")
     out["features"] = job_features(ctx)

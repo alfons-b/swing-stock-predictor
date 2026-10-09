@@ -265,6 +265,7 @@ Bila tidak memenuhi, status model menjadi **REJECTED** dan model lama tetap akti
 
 - **Tanpa server 24/7.** Daily job berjalan beberapa menit lalu selesai. Dashboard di Streamlit Community Cloud bisa gratis.
 - **Storage Supabase (perkiraan kasar, verifikasi di dashboard Supabase).** `price_history` untuk ~900 emiten × 10 tahun ≈ 2,2 juta baris. Dengan index, ukurannya bisa mendekati batas paket gratis 500 MB. Untuk paket gratis, set `data.initial_history_years: 5`–`6`.
+- **Histori minimum.** Walk-forward butuh ±3,2 tahun data untuk 1 fold validasi dan ±4,7 tahun untuk 4 fold (default). Jadi **jangan di bawah 5 tahun**. Bila kurang, `setup` langsung berhenti dalam hitungan detik dan menyebut angka yang dibutuhkan. Memperbesar `initial_history_years` belakangan aman: hanya tahun yang kurang yang diunduh (backfill).
 - **Tabel `features`** hanya menyimpan snapshot beberapa hari terakhir (`pipeline.features_snapshot_days`), karena fitur dihitung ulang dari harga.
 - **Daily** hanya memuat sekitar 2 tahun terakhir (`scan_lookback_trading_days`). **Retrain** memuat seluruh histori dan jadwalnya mingguan, tetapi hanya benar-benar melatih bila model aktif sudah lebih tua dari `retrain_frequency_days` (30 hari).
 - Daily, retrain, dan backtest memakai `concurrency: market-pipeline`, sehingga tidak pernah menulis database bersamaan.

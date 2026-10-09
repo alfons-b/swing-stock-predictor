@@ -99,3 +99,31 @@ class TestConsistency(unittest.TestCase):
         out = prediction_columns(pd.DataFrame(columns=cols))
         self.assertIn("base_rate_bullish", out)
         self.assertNotIn("y_class", out)
+
+
+class TestHistoryRequirement(unittest.TestCase):
+    """Regresi: 3 tahun histori (kalender bursa nyata ~242 hari/th) tidak cukup untuk 1 fold validasi."""
+
+    @staticmethod
+    def _dates(years):
+        import numpy as np
+        end = pd.Timestamp("2026-10-07")
+        d = pd.bdate_range(end - pd.DateOffset(months=int(years * 12)), end)
+        return pd.Series(d[np.arange(len(d)) % 14 != 0])
+
+    def test_short_history_clear_error(self):
+        from app.backtest.walk_forward import SplitError, assert_feasible
+        cfg = _cfg()
+        cfg["split"].update({"warmup_trading_days": 260, "test_months": 6, "validation_folds": 4, "fold_months": 6})
+        with self.assertRaises(SplitError) as cm:
+            assert_feasible(self._dates(3), cfg)
+        self.assertIn("initial_history_years", str(cm.exception))
+        self.assertEqual(sum(f.kind == "validation" for f in assert_feasible(self._dates(5), cfg)), 4)
+
+    def test_requirement_matches_reality(self):
+        from app.backtest.walk_forward import assert_feasible, history_requirement
+        cfg = _cfg()
+        cfg["split"].update({"warmup_trading_days": 260, "test_months": 6, "validation_folds": 4, "fold_months": 6})
+        for n in (1, 4):
+            folds = assert_feasible(self._dates(history_requirement(cfg, n)), cfg)
+            self.assertGreaterEqual(sum(f.kind == "validation" for f in folds), n)

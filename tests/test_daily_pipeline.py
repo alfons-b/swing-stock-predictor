@@ -86,3 +86,16 @@ class TestDailyPipeline(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSetupFailFast(unittest.TestCase):
+    def test_short_history_aborts_before_download(self):
+        """Regresi: histori terlalu pendek harus berhenti SEBELUM unduhan & training yang lama."""
+        from app.pipeline.jobs import PipelineAbort
+        cfg = make_cfg(as_of="2020-06-30")
+        cfg["data"]["start_date"] = "2019-06-01"
+        ctx = make_ctx(cfg)
+        with self.assertRaises(PipelineAbort) as cm:
+            job_setup(ctx, skip_backtest=True)
+        self.assertIn("initial_history_years", str(cm.exception))
+        self.assertEqual(ctx.repo.price_counts()["rows"], 0)

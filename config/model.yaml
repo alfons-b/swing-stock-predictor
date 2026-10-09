@@ -14,6 +14,9 @@ split:
   test_months: 6                 # periode test terbaru, tidak pernah dipakai tuning/seleksi
   validation_folds: 4
   fold_months: 6
+  min_train_months: 12           # data training minimal (setelah warmup) sebelum fold validasi pertama
+  # Histori yang dibutuhkan ≈ warmup (~1,1 th) + min_train (1 th) + folds×fold_months + test_months:
+  #   1 fold ≈ 3,2 th · 4 fold ≈ 4,7 th → gunakan data.initial_history_years >= 5
   # mode fixed:
   TRAIN_START: "2018-01-01"
   VALIDATION_YEARS: [2022, 2023, 2024, 2025]

@@ -17,7 +17,12 @@ from app.data.tickers import from_provider_symbol, to_provider_symbol
 
 def _yf():
     try:
+        import logging
+
         import yfinance as yf
+        # yfinance mencetak ERROR untuk setiap ticker tanpa data ("possibly delisted"). Itu bukan error pipeline:
+        # ticker tanpa data dicatat & diringkas sendiri oleh ingestion.
+        logging.getLogger("yfinance").setLevel(logging.CRITICAL)
         return yf
     except ImportError as e:  # pragma: no cover
         raise ProviderUnavailable("yfinance belum terpasang (pip install yfinance)") from e

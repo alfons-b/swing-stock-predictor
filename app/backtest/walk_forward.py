@@ -16,6 +16,43 @@ import pandas as pd
 from app.config import embargo_days, get
 
 
+TRADING_DAYS_PER_YEAR = 242  # perkiraan hari bursa BEI per tahun (Senin–Jumat dikurangi libur bursa)
+
+
+class SplitError(RuntimeError):
+    """Histori data terlalu pendek untuk walk-forward yang diminta."""
+
+
+def history_requirement(cfg: dict, n_folds: int | None = None) -> float:
+    """Perkiraan histori minimum (tahun) untuk `n_folds` fold validasi (default: jumlah dari config)."""
+    n = int(get(cfg, "split.validation_folds", 4)) if n_folds is None else n_folds
+    warm = int(get(cfg, "split.warmup_trading_days", 260)) / TRADING_DAYS_PER_YEAR
+    train = int(get(cfg, "split.min_train_months", 12)) / 12
+    fold = int(get(cfg, "split.fold_months", 6)) / 12
+    test = int(get(cfg, "split.test_months", 6)) / 12
+    return round(warm + train + n * fold + test + 0.1, 1)  # +0.1 th margin embargo
+
+
+def assert_feasible(dates, cfg: dict) -> list:
+    """Pastikan minimal 1 fold validasi + fold test terbentuk; bila tidak, error yang menjelaskan solusinya."""
+    if get(cfg, "split.mode", "rolling") != "rolling":
+        folds = make_folds(dates, cfg)
+        if not any(f.kind == "validation" for f in folds):
+            raise SplitError("Tidak ada fold validasi — periksa split.VALIDATION_YEARS vs rentang data (mode fixed)")
+        return folds
+    ud = pd.to_datetime(pd.Series(dates).unique())
+    folds = make_folds(dates, cfg) if len(ud) > int(get(cfg, "split.warmup_trading_days", 260)) else []
+    n_val = sum(f.kind == "validation" for f in folds)
+    if n_val == 0:
+        span = (ud.max() - ud.min()).days / 365.25 if len(ud) else 0
+        raise SplitError(
+            f"Histori data terlalu pendek untuk walk-forward: {len(ud)} hari bursa (~{span:.1f} tahun). "
+            f"Minimal ~{history_requirement(cfg, 1)} tahun untuk 1 fold validasi, ~{history_requirement(cfg)} tahun untuk "
+            f"{get(cfg, 'split.validation_folds', 4)} fold. Jalankan ulang dengan histori lebih panjang, mis. "
+            f"`--set data.initial_history_years=5` — data yang sudah ada tidak diunduh ulang, hanya tahun yang kurang.")
+    return folds
+
+
 @dataclass
 class Fold:
     name: str
@@ -52,7 +89,7 @@ def resolve_periods(dates: pd.Series, cfg: dict):
     end = test_start - pd.Timedelta(days=1)
     for i in range(n):
         start = end - pd.DateOffset(months=fm) + pd.Timedelta(days=1)
-        if start <= ts + pd.DateOffset(months=12):  # minimal 1 tahun data training
+        if start <= ts + pd.DateOffset(months=int(get(cfg, "split.min_train_months", 12))):  # training minimal
             break
         vals.append((f"val_{start:%Y%m}", start, end))
         end = start - pd.Timedelta(days=1)

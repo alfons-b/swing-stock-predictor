@@ -4,6 +4,7 @@ market_data:
     attempts: 3
     backoff_seconds: 2           # 2s, 4s, 8s ...
   batch_size: 50
+  action_workers: 4              # unduhan corporate action paralel (1 request per emiten di Yahoo)
   providers:
     - name: yahoo_finance
       type: yahoo

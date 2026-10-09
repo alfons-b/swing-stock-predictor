@@ -95,3 +95,38 @@ class TestCalendarFreshness(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBackfillAndActions(unittest.TestCase):
+    def test_extending_history_backfills_older_data(self):
+        cfg = make_cfg(as_of="2019-06-28")
+        cfg["data"]["start_date"] = "2018-06-01"
+        ctx, _ = ingest(cfg)
+        first = ctx.db.scalar("SELECT MIN(date) FROM price_history")
+        last0 = ctx.repo.max_price_date()
+        self.assertGreaterEqual(str(first), "2018-06-01")
+        cfg2 = dict(cfg, data=dict(cfg["data"], start_date="2017-06-01"))
+        ctx, st = ingest(cfg2, ctx)                                  # histori diperpanjang 1 tahun ke belakang
+        self.assertGreater(st.backfill_index_rows, 200)
+        self.assertGreater(st.backfill_rows, 1000)
+        self.assertLessEqual(str(ctx.db.scalar("SELECT MIN(date) FROM price_history")), "2017-06-05")
+        self.assertEqual(ctx.repo.max_price_date(), last0)
+        self.assertEqual(ctx.repo.price_counts()["duplicates"], 0)
+        ctx, st = ingest(cfg2, ctx)                                  # dijalankan ulang → tidak ada backfill lagi
+        self.assertEqual((st.backfill_index_rows, st.backfill_rows), (0, 0))
+
+    def test_full_action_scan_not_repeated_within_window(self):
+        from app.data.ingestion import FULL_ACTIONS_SCAN
+        cfg = make_cfg(as_of="2020-12-31")  # split ZSPL & dividen di data contoh terjadi setelah pertengahan 2019
+        ctx = make_ctx(cfg)
+        UniverseManager(cfg, ctx.repo, ctx.chain).update()
+        calls = []
+        orig = ctx.chain.fetch_actions
+        ctx.chain.fetch_actions = lambda *a, **k: (calls.append(a[0]), orig(*a, **k))[1]
+        run_ingestion(cfg, ctx.repo, ctx.chain, ctx.calendar, full_actions=True)
+        n_first = len(calls)
+        self.assertGreater(n_first, 5)
+        self.assertIsNotNone(ctx.repo.source_last_success(FULL_ACTIONS_SCAN))
+        self.assertGreater(ctx.db.scalar("SELECT COUNT(*) FROM corporate_actions"), 0)
+        run_ingestion(cfg, ctx.repo, ctx.chain, ctx.calendar, full_actions=True)
+        self.assertEqual(len(calls), n_first)                       # scan penuh kedua dilewati

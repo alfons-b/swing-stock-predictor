@@ -138,9 +138,8 @@ def _rank01(s: pd.Series, higher_better: bool = True) -> pd.Series:
 def compare_models(df: pd.DataFrame, cfg: dict) -> dict:
     """AD. Bandingkan kandidat HANYA pada fold validasi. Test set tidak disentuh."""
     cands = available_models(get(cfg, "model.candidates", ["logistic", "hist_gbm"]))
-    folds = [f for f in make_folds(df["date"], cfg) if f.kind == "validation"]
-    if not folds:
-        raise RuntimeError("Tidak ada fold validasi — periksa split.VALIDATION_YEARS vs rentang data")
+    from app.backtest.walk_forward import assert_feasible
+    folds = [f for f in assert_feasible(df["date"], cfg) if f.kind == "validation"]
     feats, ic_rep = select_features(df, fold_masks(df, folds[0])[0], cfg)
     rows, per_fold = [], []
     for name in cands:

@@ -57,9 +57,9 @@ class Repository:
 
     # ================================================================ prices
     def latest_price_dates(self) -> pd.DataFrame:
-        return self.db.query_df("SELECT s.id AS stock_id, s.ticker, MAX(p.date) AS last_date, COUNT(p.id) AS n_rows "
-                                "FROM stocks s LEFT JOIN price_history p ON p.stock_id = s.id GROUP BY s.id, s.ticker",
-                                parse_dates=["last_date"])
+        return self.db.query_df("SELECT s.id AS stock_id, s.ticker, MIN(p.date) AS first_date, MAX(p.date) AS last_date, "
+                                "COUNT(p.id) AS n_rows FROM stocks s LEFT JOIN price_history p ON p.stock_id = s.id "
+                                "GROUP BY s.id, s.ticker", parse_dates=["first_date", "last_date"])
 
     def max_price_date(self):
         v = self.db.scalar("SELECT MAX(date) FROM price_history")
@@ -102,6 +102,14 @@ class Repository:
     # ================================================================ index
     def max_index_date(self, symbol: str):
         v = self.db.scalar("SELECT MAX(date) FROM market_index WHERE symbol = ?", (symbol,))
+        return pd.Timestamp(v) if v else None
+
+    def min_index_date(self, symbol: str):
+        v = self.db.scalar("SELECT MIN(date) FROM market_index WHERE symbol = ?", (symbol,))
+        return pd.Timestamp(v) if v else None
+
+    def source_last_success(self, name: str):
+        v = self.db.scalar("SELECT last_success_at FROM data_sources WHERE name = ?", (name,))
         return pd.Timestamp(v) if v else None
 
     def upsert_index(self, df: pd.DataFrame, symbol: str, source: str) -> tuple[int, int]:

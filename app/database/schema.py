@@ -123,6 +123,41 @@ def render_ddl(dialect: str, part: str = "all") -> list[str]:
     return {"tables": tables, "indexes": indexes, "all": tables + indexes}[part]
 
 
+class SchemaConflictError(RuntimeError):
+    pass
+
+
+def column_info(db: Database, table: str) -> dict[str, dict]:
+    """{kolom: {"notnull": bool, "has_default": bool}} untuk tabel yang sudah ada (kosong bila belum ada)."""
+    if db.dialect == "sqlite":
+        return {r[1]: {"notnull": bool(r[3]) and not r[5], "has_default": r[4] is not None or bool(r[5])}
+                for r in db.query(f"PRAGMA table_info({table})")}
+    rows = db.query("SELECT column_name, is_nullable, column_default FROM information_schema.columns "
+                    "WHERE table_name = ? AND table_schema = current_schema()", (table,))
+    return {r[0]: {"notnull": r[1] == "NO", "has_default": r[2] is not None} for r in rows}
+
+
+def check_compatibility(db: Database) -> list[str]:
+    """Deteksi tabel bernama sama yang dibuat program LAIN (kolom wajib yang tidak dikenal proyek ini).
+
+    Tanpa pemeriksaan ini, bentrokan baru muncul sebagai error NOT NULL di tengah pipeline.
+    """
+    problems = []
+    for name, cols, _, _ in TABLES:
+        info = column_info(db, name)
+        if not info:
+            continue
+        ours = {c: ("NOT NULL" in cons or "PRIMARY KEY" in cons or t == "ID") for c, t, cons in cols}
+        for col, meta in info.items():
+            if not meta["notnull"] or meta["has_default"]:
+                continue
+            if col not in ours:
+                problems.append(f"{name}.{col} (kolom wajib yang tidak dikenal proyek ini)")
+            elif not ours[col]:
+                problems.append(f"{name}.{col} (NOT NULL, seharusnya boleh kosong)")
+    return problems
+
+
 def existing_columns(db: Database, table: str) -> set[str]:
     if db.dialect == "sqlite":
         return {r[1] for r in db.query(f"PRAGMA table_info({table})")}
@@ -144,6 +179,14 @@ def add_missing_columns(db: Database) -> list[str]:
 
 def migrate(db: Database) -> int:
     """Buat tabel yang belum ada + tambahkan kolom baru. Aman dijalankan berulang (setiap run daily memanggilnya)."""
+    conflicts = check_compatibility(db)
+    if conflicts:
+        hint = ("hapus file database lokal (data/local.db) agar dibuat ulang" if db.dialect == "sqlite" else
+                "pakai project Supabase baru/kosong, atau hapus tabel lama tersebut di SQL Editor")
+        raise SchemaConflictError(
+            "Database sudah berisi tabel dari program lain yang tidak cocok dengan proyek ini: "
+            + "; ".join(conflicts[:8]) + (f" (+{len(conflicts) - 8} lagi)" if len(conflicts) > 8 else "")
+            + f". Solusi: {hint}.")
     db.executescript(render_ddl(db.dialect, "tables"))
     add_missing_columns(db)
     db.executescript(render_ddl(db.dialect, "indexes"))

@@ -46,7 +46,8 @@ data:
   start_date: null                             # null = hari ini - initial_history_years
   index_id: COMPOSITE
   overlap_days: 0                              # 0 = hanya tanggal yang hilang
-  refetch_on_split: true                       # provider split-adjusted (Yahoo): unduh ulang histori bila ada split baru
+  refetch_on_split: true
+  full_actions_scan_days: 7      # setup/retrain tidak mengulang cek corporate action semua emiten bila sudah dalam N hari                       # provider split-adjusted (Yahoo): unduh ulang histori bila ada split baru
 
 quality:
   max_abs_daily_return: 0.35

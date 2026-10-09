@@ -72,3 +72,24 @@ class TestDatabase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSchemaConflict(unittest.TestCase):
+    def test_foreign_table_detected_with_clear_message(self):
+        """Regresi: data/local.db yang dibuat program lain → pesan jelas, bukan 'NOT NULL constraint failed'."""
+        from app.database.schema import SchemaConflictError
+        for url in db_urls():
+            with self.subTest(url=url.split("@")[-1]):
+                db = Database.from_url(url)
+                db.executescript([f"DROP TABLE IF EXISTS {t} CASCADE" if db.dialect == "postgres" else f"DROP TABLE IF EXISTS {t}"
+                                  for t in reversed(TABLE_NAMES)])
+                db.executescript(["CREATE TABLE pipeline_runs (id INTEGER PRIMARY KEY, run_id TEXT NOT NULL, "
+                                  "stocks_processed INTEGER NOT NULL, foreign_col TEXT NOT NULL)"])
+                with self.assertRaises(SchemaConflictError) as cm:
+                    migrate(db)
+                msg = str(cm.exception)
+                self.assertIn("pipeline_runs.stocks_processed", msg)
+                self.assertIn("pipeline_runs.foreign_col", msg)
+                db.executescript(["DROP TABLE pipeline_runs"])
+                migrate(db)  # setelah tabel asing dihapus, migrasi normal
+                db.close()
