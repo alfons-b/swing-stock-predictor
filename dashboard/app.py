@@ -71,8 +71,9 @@ except Exception as e:
     st.error(f"Database tidak bisa diakses: {type(e).__name__}. Set DATABASE_URL di secrets.")
     st.stop()
 
-PAGES = ["Market Overview", "Top Swing Stocks", "Sector Strength", "Stock Detail", "Prediction History", "Backtest",
-         "Model Performance", "Pipeline Status", "Data Health"]
+PAGES = ["Market Overview", "Top Swing Stocks", "Sector Strength", "Stock Detail", "Undervalued Screener", "Foreign Flow",
+         "Accumulation / Distribution", "Integrated Research", "Prediction History", "Backtest", "Model Performance",
+         "Pipeline Status", "Data Health"]
 page = st.sidebar.radio("Halaman", PAGES)
 st.sidebar.caption("Analytical decision support — bukan jaminan profit. Bukan nasihat investasi.")
 
@@ -232,3 +233,88 @@ elif page == "Data Health":
     st.subheader("Sumber data")
     st.dataframe(q("SELECT name, type, priority, enabled, last_success_at, last_error_at, last_error, rows_fetched_total FROM data_sources"),
                  hide_index=True, use_container_width=True)
+
+
+# ================================================================ halaman riset (logika data: app/research/dashboard_data.py)
+elif page == "Undervalued Screener":
+    from app.research import dashboard_data as dd
+    st.title("Undervalued screener")
+    st.caption("Nilai wajar = RENTANG estimasi berbasis asumsi (config/research.yaml). Keputusan VALUE terpisah dari SWING. "
+               "Bukan nasihat investasi.")
+    cov = dd.valuation_coverage(c.repo)
+    k = st.columns(3)
+    k[0].metric("Tanggal valuasi", cov.get("date") or "–")
+    k[1].metric("Emiten dinilai", sum(v for s_, v in cov.get("by_status", {}).items() if s_ != "INSUFFICIENT_DATA"))
+    k[2].metric("INSUFFICIENT_DATA", cov.get("by_status", {}).get("INSUFFICIENT_DATA", 0))
+    a, b, c3, d4 = st.columns(4)
+    min_mos = a.slider("Margin of safety minimum", -0.5, 0.8, 0.2, 0.05)
+    statuses = b.multiselect("Status", ["DEEP_VALUE", "UNDERVALUED", "FAIRLY_VALUED", "OVERVALUED"], ["DEEP_VALUE", "UNDERVALUED"])
+    excl = c3.checkbox("Sembunyikan value trap HIGH", True)
+    minq = d4.slider("Quality score minimum", 0, 100, 0, 5)
+    tbl = dd.undervalued_screener(c.repo, min_mos, statuses, excl, None, minq or None)
+    if tbl.empty:
+        st.info("Tidak ada emiten yang memenuhi filter, atau belum ada valuasi. Valuasi butuh laporan keuangan — "
+                "lihat status sumber di bawah.")
+    else:
+        st.dataframe(tbl, hide_index=True, use_container_width=True)
+    st.subheader("Status sumber fundamental & foreign flow")
+    st.dataframe(dd.source_status(c.repo), hide_index=True, use_container_width=True)
+
+elif page == "Foreign Flow":
+    from app.research import dashboard_data as dd
+    st.title("Foreign flow")
+    ov = dd.foreign_flow_overview(c.repo)
+    if ov["status"] != "AVAILABLE":
+        st.warning("FOREIGN_FLOW_UNAVAILABLE — belum ada data foreign flow. Simpan file Ringkasan Saham BEI (unduhan "
+                   "manual, satu file per hari, tanggal di nama file) di data/raw/foreign_flow atau isi API vendor. "
+                   "Skor & ranking yang butuh foreign flow tidak ditampilkan (bukan dianggap nol).")
+        st.dataframe(dd.source_status(c.repo), hide_index=True, use_container_width=True)
+    else:
+        st.caption(f"Data terakhir {ov['last_date']}. Nilai rupiah: {ov['value_label']} "
+                   "(ESTIMATED_VALUE = lembar × VWAP harian, bukan angka resmi).")
+        dly = ov["daily"]
+        st.plotly_chart(go.Figure(go.Bar(x=dly["date"], y=dly["net_value"] / 1e9,
+                                         marker_color=np.where(dly["net_value"] >= 0, UP, DOWN)))
+                        .update_layout(height=320, title="Net beli asing seluruh emiten (Rp miliar)",
+                                       margin=dict(l=10, r=10, t=40, b=10)), use_container_width=True)
+        st.dataframe(dd.foreign_flow_table(c.repo), hide_index=True, use_container_width=True)
+        tk = st.text_input("Detail emiten", "")
+        if tk:
+            f = dd.ticker_flows(c.repo, tk.strip().upper())
+            if len(f):
+                st.plotly_chart(go.Figure(go.Bar(x=f["date"], y=pd.to_numeric(f["net_foreign_shares"]), marker_color=ACCENT))
+                                .update_layout(height=300, title=f"{tk.upper()} net asing (lembar)"), use_container_width=True)
+                st.dataframe(f, hide_index=True, use_container_width=True)
+
+elif page == "Accumulation / Distribution":
+    from app.research import dashboard_data as dd
+    st.title("Akumulasi / distribusi")
+    st.caption("Bukti perilaku harga-volume (OBV, ADL, CMF, MFI, RVOL, CLV, VWAP, divergensi) + foreign flow bila ada. "
+               "Bukan bukti identitas pembeli. STRONG hanya bila foreign flow tersedia & searah.")
+    stages = st.multiselect("Tahap", ["EARLY_ACCUMULATION_WATCHLIST", "BREAKOUT_CONFIRMED", "DISTRIBUTION_WARNING", "NO_CLEAR_SIGNAL"],
+                            ["EARLY_ACCUMULATION_WATCHLIST", "BREAKOUT_CONFIRMED", "DISTRIBUTION_WARNING"])
+    tbl = dd.accumulation_table(c.repo, stages)
+    st.dataframe(tbl, hide_index=True, use_container_width=True)
+    tk = st.selectbox("Bukti per emiten", [""] + tbl["ticker"].tolist() if len(tbl) else [""])
+    if tk:
+        st.dataframe(dd.accumulation_evidence(c.repo, tk), hide_index=True, use_container_width=True)
+
+elif page == "Integrated Research":
+    from app.research import dashboard_data as dd
+    from app.research.integrated_scoring import RANKINGS
+    st.title("Integrated research")
+    st.caption("Skor terpisah 0–100; composite = rata-rata berbobot skor yang TERSEDIA (bobot dinormalisasi ulang). "
+               "Emiten dengan data kurang tidak diranking. VALUE dan SWING adalah keputusan terpisah.")
+    t = dd.integrated_table(c.repo, c.cfg)
+    if t.empty:
+        st.info("Belum ada hasil daily.")
+    else:
+        name = st.selectbox("Ranking", RANKINGS, index=RANKINGS.index("integrated"))
+        st.dataframe(dd.ranking_view(t, name, 30), hide_index=True, use_container_width=True)
+        st.subheader("Keputusan VALUE vs SWING")
+        st.dataframe(pd.crosstab(t["value_decision"], t["swing_decision"]), use_container_width=True)
+        tk = st.selectbox("STOCK RESEARCH REPORT", [""] + sorted(t["ticker"].tolist()))
+        if tk:
+            from app.research.report import build_research, stock_report
+            with st.spinner("Menghitung ulang (point-in-time) ..."):
+                st.code(stock_report(build_research(c.cfg, c.repo, None, tickers=[tk]), tk), language=None)

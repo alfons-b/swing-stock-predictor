@@ -48,6 +48,20 @@ class TestDailyPipeline(unittest.TestCase):
         last = ctx.repo.last_run("daily")
         self.assertIn(last["status"], ("SUCCESS", "PARTIAL_SUCCESS"))
         self.assertGreater(ctx.db.scalar("SELECT COUNT(*) FROM system_logs WHERE run_id = ?", (last["run_id"],)), 0)
+        # modul riset ikut berjalan; tanpa sumber fundamental/flow → label, bukan angka karangan
+        rs = s["research"]
+        self.assertTrue(all(v == "OK" for v in rs["status"].values()), rs["status"])
+        self.assertEqual(rs["foreign_flow_status"], "FOREIGN_FLOW_UNAVAILABLE")
+        self.assertEqual(rs["valuation_ok"], 0)
+        st = ctx.db.query_df("SELECT valuation_status, value_score, accumulation_status, foreign_flow_score "
+                             "FROM predictions WHERE prediction_date = ?", ("2020-07-03",))
+        self.assertTrue((st["valuation_status"] == "INSUFFICIENT_DATA").all())
+        self.assertTrue(st["value_score"].isna().all() and st["foreign_flow_score"].isna().all())
+        self.assertTrue(st["accumulation_status"].notna().all())
+        self.assertNotIn("STRONG_ACCUMULATION_SIGNAL", set(st["accumulation_status"]))   # tanpa flow → maks MODERATE
+        self.assertIn("research_csv", kinds)
+        src = dict(ctx.db.query("SELECT name, status FROM data_sources WHERE category IN ('fundamental', 'foreign_flow')"))
+        self.assertEqual(src.get("csv_fundamentals"), "NOT_CONFIGURED")
         self.assertLessEqual(len(s["recommendations"]), self.cfg["scoring"]["TOP_N_STOCKS"])
         for r in s["recommendations"]:
             self.assertGreaterEqual(r["risk_reward"], self.cfg["strategy"]["MIN_RISK_REWARD"])

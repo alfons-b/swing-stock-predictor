@@ -42,3 +42,6 @@ jobs:
       - run: python main.py health --no-provider
       - name: Backtest
         run: python main.py backtest ${{ inputs.folds && format('--folds {0}', inputs.folds) || '' }} | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Evaluasi modul riset (9 varian + IC faktor, point-in-time)
+        continue-on-error: true      # data fundamental/flow historis bisa belum cukup → INSUFFICIENT_HISTORY, bukan gagal
+        run: python main.py evaluate-modules | tee -a "$GITHUB_STEP_SUMMARY"

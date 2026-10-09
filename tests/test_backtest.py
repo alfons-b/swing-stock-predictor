@@ -106,7 +106,6 @@ class TestHistoryRequirement(unittest.TestCase):
 
     @staticmethod
     def _dates(years):
-        import numpy as np
         end = pd.Timestamp("2026-10-07")
         d = pd.bdate_range(end - pd.DateOffset(months=int(years * 12)), end)
         return pd.Series(d[np.arange(len(d)) % 14 != 0])

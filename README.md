@@ -50,6 +50,8 @@ Buka **Settings → Secrets and variables → Actions → New repository secret*
 | `SUPABASE_URL` | Tidak | Hanya bila `MODEL_STORAGE`/`REPORT_STORAGE` = `supabase` |
 | `SUPABASE_KEY` | Tidak | *Service role key*, untuk Supabase Storage. Jangan pernah dipakai di dashboard publik |
 | `MARKET_DATA_API_KEY` | Tidak | Hanya bila Anda punya feed data berlisensi (IDX) |
+| `FUNDAMENTAL_API_KEY` | Tidak | Feed laporan keuangan berlisensi (point-in-time). Tanpa ini: CSV manual + snapshot Yahoo |
+| `FOREIGN_FLOW_API_URL`, `FOREIGN_FLOW_API_KEY` | Tidak | API foreign flow vendor. Tanpa ini: file Ringkasan Saham BEI di `data/raw/foreign_flow` |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` / `NOTIFY_WEBHOOK_URL` | Tidak | Notifikasi ringkasan harian |
 
 Ada juga **Variables** (bukan secret) yang opsional: `PORTFOLIO_VALUE` (default `100000000`), `MODEL_STORAGE`, dan `REPORT_STORAGE` (default `auto`).
@@ -201,6 +203,11 @@ Variabel di `.env` **tidak** dibaca otomatis. Set lewat shell, atau jalankan `do
 | `python main.py evaluate` | Evaluasi prediksi yang horizonnya sudah lewat |
 | `python main.py models [--promote model_v00X]` | Daftar versi model / manual override |
 | `python main.py db-schema` | Menulis `sql/schema_postgres.sql` |
+| `python main.py db-maintenance [--dry-run] [--full]` | Retensi data + VACUUM; `--full` benar-benar menurunkan ukuran |
+| `python main.py research BBCA [--date]` | **STOCK RESEARCH REPORT**: valuasi, foreign flow, akumulasi, skor & ranking (point-in-time) |
+| `python main.py rankings --ranking best_value` | Salah satu dari 9 ranking riset terintegrasi |
+| `python main.py valuation` / `fundamentals-update` / `fundamentals-template` / `foreign-flow-update` | Modul riset terpisah |
+| `python main.py evaluate-modules` | Evaluasi historis 9 varian + IC faktor (lihat `docs/RESEARCH_MODULES.md`) |
 | `--as-of YYYY-MM-DD` | Simulasi tanggal (untuk test dan backfill) |
 
 Kode keluar (exit code):
@@ -265,7 +272,28 @@ Bila tidak memenuhi, status model menjadi **REJECTED** dan model lama tetap akti
 ## 4. Biaya & kapasitas
 
 - **Tanpa server 24/7.** Daily job berjalan beberapa menit lalu selesai. Dashboard di Streamlit Community Cloud bisa gratis.
-- **Storage Supabase.** Diukur di PostgreSQL 16: `price_history` ≈ 200 byte per baris termasuk index. Untuk ~950 emiten: 6 tahun ≈ 275 MB (default), 10 tahun ≈ 455 MB. Batas paket gratis adalah 500 MB, dan tabel lain (prediksi harian, versi model yang disimpan di database) terus bertambah. Jadi di paket gratis jangan naikkan di atas 6 tahun, dan cek pemakaian di *Supabase → Project Settings → Usage* sebulan sekali.
+- **Storage Supabase.** Di paket gratis, database yang melewati **500 MB** membuat project **read-only**: semua penulisan gagal, dan daily pipeline gagal setiap hari ([dokumentasi Supabase](https://supabase.com/docs/guides/platform/database-size)). Pertumbuhan yang diukur di PostgreSQL 16 untuk ~920 emiten:
+
+  | Tabel | Ukuran | Pertumbuhan |
+  |---|---|---|
+  | `predictions` + evaluasi | ±800 B/baris | **±177 MB/tahun** (semua emiten, setiap hari) |
+  | `price_history` | ±200 B/baris | ±45 MB/tahun |
+  | `foreign_flow_history` (bila file/API tersedia) | ±200 B/baris | ±45 MB/tahun |
+  | `valuation_results` (harian 14 hari + akhir bulan) | ±2,4 KB/baris | ±30 MB tetap + ±22 MB/tahun |
+
+  Pencegahannya otomatis (`retention` di `config/app.yaml`):
+  - prediksi WAIT/AVOID lebih tua dari 180 hari dihapus, sedangkan **BUY & WATCHLIST disimpan selamanya**;
+  - report di database > 60 hari dihapus;
+  - log > 90 hari dihapus;
+  - harga > 7 tahun dihapus;
+  - file model lama dihapus, kecuali model ACTIVE dan 3 versi terbaru (registry dan metriknya tetap).
+
+  Mekanismenya berjalan di tiga tempat:
+  - **Daily** menjalankan retensi sendiri bila ukuran ≥ 85% batas.
+  - **Workflow Database Maintenance** berjalan tiap tanggal 1, dan bisa juga manual dengan opsi *dry_run* / *full*.
+  - **Health check** menampilkan `DATABASE SIZE` (WARN ≥ 80%, FAIL ≥ 95%).
+
+  Kalau database sempat read-only, daily mencoba memulihkan sendiri (retensi + `VACUUM FULL`). Kalau masih terlalu besar, daily berhenti dengan pesan jelas. Setelah upgrade ke paket Pro, set Variable `DB_SIZE_LIMIT_MB=8000`.
 - **Histori minimum.** Walk-forward butuh ±3,2 tahun data untuk 1 fold validasi dan ±4,7 tahun untuk 4 fold (default). Jadi **jangan di bawah 5 tahun**. Bila kurang, `setup` langsung berhenti dalam hitungan detik dan menyebut angka yang dibutuhkan. Memperbesar `initial_history_years` belakangan aman: hanya tahun yang kurang yang diunduh (backfill).
 - **Tabel `features`** hanya menyimpan snapshot beberapa hari terakhir (`pipeline.features_snapshot_days`), karena fitur dihitung ulang dari harga.
 - **Daily** hanya memuat sekitar 2 tahun terakhir (`scan_lookback_trading_days`). **Retrain** memuat seluruh histori dan jadwalnya mingguan, tetapi hanya benar-benar melatih bila model aktif sudah lebih tua dari `retrain_frequency_days` (30 hari).
@@ -276,10 +304,10 @@ Bila tidak memenuhi, status model menjadi **REJECTED** dan model lama tetap akti
 ## 5. Struktur proyek
 
 ```
-.github/workflows/  daily.yml · model_retrain.yml · weekly_backtest.yml · tests.yml · setup.yml
+.github/workflows/  daily.yml · model_retrain.yml · weekly_backtest.yml · tests.yml · setup.yml · db_maintenance.yml
 app/
   data/          providers (Yahoo, IDX, CSV, ProviderChain), universe manager, ingestion, validator, cleaner
-  database/      db.py (SQLite/PostgreSQL, UPSERT), schema.py (17 tabel, migrasi), repository.py
+  database/      db.py (SQLite/PostgreSQL, UPSERT), schema.py (21 tabel, migrasi aditif), repository.py
   features/      indikator & fitur teknikal (bebas look-ahead), fundamental/berita point-in-time
   market/        TradingCalendar (Asia/Jakarta), market regime, sector strength & relative strength
   models/        label, model factory, kalibrasi, ensemble, trainer, retrain + kebijakan promosi
@@ -288,11 +316,16 @@ app/
   scanner/       ranking & daily scanner, analisis per saham
   backtest/      engine (eksekusi konservatif), metrik, walk-forward, runner
   pipeline/      context (run tracking), jobs (daily/setup/...), health, freshness, evaluate
+  valuation/     laporan keuangan PIT, rasio, nilai wajar (rentang), margin of safety, value trap, skor
+  flows/         foreign flow (lembar ≠ nilai), fitur 5/20/60H, skor & status
+  accumulation/  OBV/ADL/CMF/MFI/RVOL/CLV/VWAP, skor akumulasi, distribusi, tahap, antarmuka broker summary
+  research/      skor terpisah + 9 ranking, orkestrasi daily, STOCK RESEARCH REPORT, evaluasi, data dashboard
   storage/       ModelStorage & ReportStorage (local / database / Supabase Storage)
   reporting/     CSV, HTML, Markdown harian
   notifications/ Telegram / webhook (opsional)
 dashboard/app.py    Streamlit (membaca database)
-config/             app.yaml · sources.yaml · model.yaml · trading.yaml · holidays.yaml · universe.example.csv
+config/             app.yaml · sources.yaml · model.yaml · trading.yaml · research.yaml · holidays.yaml · universe.example.csv
+docs/RESEARCH_MODULES.md   audit, metode valuasi/flow/akumulasi, point-in-time, self-audit P0–P3, cara verifikasi
 tests/              test_database … test_daily_pipeline (lihat §57)
 Dockerfile · Dockerfile.dashboard · docker-compose.yml · render.yaml · .env.example
 ```
@@ -319,6 +352,11 @@ Hasil ini dijalankan dengan SQLite dan `make-sample` (45 ticker fiktif, 2017–2
 ---
 
 ## 7. Keterbatasan yang diketahui (dinyatakan terus terang)
+
+- **Modul riset** (valuasi, foreign flow, akumulasi): detail, sumber data, dan self-audit ada di
+  [`docs/RESEARCH_MODULES.md`](docs/RESEARCH_MODULES.md). Tanpa feed fundamental berlisensi, valuasi memakai snapshot
+  Yahoo yang baru berlaku sejak tanggal diambil; tanpa file Ringkasan Saham/API vendor, foreign flow berstatus
+  `FOREIGN_FLOW_UNAVAILABLE` dan tidak ikut dalam skor (bukan dianggap nol).
 
 - **Yahoo Finance** adalah sumber tidak resmi. Kualitas dan ketersediaannya bisa berubah sewaktu-waktu, data emiten delisting tidak tersedia, dan sektor memakai taksonomi Yahoo, bukan IDX-IC.
 - **Batas ARA/ARB, papan pemantauan khusus (full call auction), dan spread bid-ask** belum dimodelkan di backtest.

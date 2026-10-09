@@ -10,6 +10,7 @@ import pandas as pd
 
 from app.config import get
 from app.data.tickers import normalize_ticker
+from app.risk.concentration import apply_concentration_limits
 from app.scanner.ranking import generate_signals, rank_signals
 from app.strategy.explain import build_reasoning, model_drivers
 
@@ -36,6 +37,7 @@ def scan_day(cfg: dict, df: pd.DataFrame, model, freshness: dict, date=None) -> 
     pred = model.predict(day)
     sig = generate_signals(day, pred, cfg)
     sig = apply_freshness_gate(sig, freshness)
+    sig = apply_concentration_limits(sig, cfg, df[df["date"] <= d])
     ranked = rank_signals(sig, cfg)
     return {"date": d, "signals": sig, "ranked": ranked, "pred": pred}
 

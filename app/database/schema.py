@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from app.database.db import Database
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 TYPES = {
     "sqlite": {"ID": "INTEGER PRIMARY KEY AUTOINCREMENT", "TEXT": "TEXT", "INT": "INTEGER", "REAL": "REAL",
@@ -23,7 +23,7 @@ TYPES = {
 TABLES = [
     ("stocks", [("id", "ID", ""), ("ticker", "TEXT", "NOT NULL"), ("name", "TEXT", ""), ("sector", "TEXT", ""),
                 ("subsector", "TEXT", ""), ("board", "TEXT", ""), ("listing_date", "DATE", ""),
-                ("delisting_date", "DATE", ""), ("is_active", "BOOL", "NOT NULL"), ("previous_ticker", "TEXT", ""), ("listed_shares", "REAL", ""),
+                ("delisting_date", "DATE", ""), ("is_active", "BOOL", "NOT NULL"), ("previous_ticker", "TEXT", ""), ("listed_shares", "REAL", ""), ("fundamentals_checked_at", "TS", ""),
                 ("first_seen", "TS", ""), ("last_seen", "TS", ""), ("updated_at", "TS", "")],
      [["ticker"]], [["is_active"], ["sector"]]),
     ("price_history", [("id", "ID", ""), ("stock_id", "INT", "NOT NULL REFERENCES stocks(id)"), ("date", "DATE", "NOT NULL"),
@@ -55,7 +55,11 @@ TABLES = [
                      ("tp2", "REAL", ""), ("risk_reward", "REAL", ""), ("position_size", "INT", ""), ("lots", "INT", ""),
                      ("capital_required", "REAL", ""), ("estimated_loss", "REAL", ""), ("confidence", "TEXT", ""),
                      ("close_price", "REAL", ""), ("data_status", "TEXT", ""), ("reasons", "JSON", ""), ("risks", "JSON", ""),
-                     ("reject_reasons", "JSON", ""), ("run_id", "TEXT", ""), ("created_at", "TS", "")],
+                     ("reject_reasons", "JSON", ""), ("run_id", "TEXT", ""), ("created_at", "TS", ""),
+                     ("value_score", "REAL", ""), ("quality_score", "REAL", ""), ("value_trap_risk", "TEXT", ""),
+                     ("margin_of_safety", "REAL", ""), ("valuation_status", "TEXT", ""), ("foreign_flow_score", "REAL", ""),
+                     ("foreign_flow_status", "TEXT", ""), ("accumulation_score", "REAL", ""), ("distribution_risk", "REAL", ""),
+                     ("accumulation_status", "TEXT", ""), ("accumulation_stage", "TEXT", "")],
      [["prediction_date", "stock_id", "model_version"]], [["ticker"], ["decision"], ["model_version"]]),
     ("prediction_evaluations", [("id", "ID", ""), ("prediction_id", "INT", "NOT NULL REFERENCES predictions(id)"),
                                 ("evaluated_at", "TS", ""), ("actual_return_3d", "REAL", ""), ("actual_return_5d", "REAL", ""),
@@ -94,7 +98,8 @@ TABLES = [
      [["run_id"]], [["run_type", "started_at"]]),
     ("data_sources", [("id", "ID", ""), ("name", "TEXT", "NOT NULL"), ("type", "TEXT", ""), ("priority", "INT", ""),
                       ("enabled", "BOOL", ""), ("last_success_at", "TS", ""), ("last_error_at", "TS", ""),
-                      ("last_error", "TEXT", ""), ("rows_fetched_total", "INT", "")],
+                      ("last_error", "TEXT", ""), ("rows_fetched_total", "INT", ""), ("category", "TEXT", ""),
+                      ("status", "TEXT", ""), ("detail", "TEXT", ""), ("checked_at", "TS", "")],
      [["name"]], []),
     ("system_logs", [("id", "ID", ""), ("run_id", "TEXT", ""), ("ts", "TS", ""), ("level", "TEXT", ""), ("logger", "TEXT", ""),
                      ("message", "TEXT", "")],
@@ -103,6 +108,42 @@ TABLES = [
                  ("content", "BLOB", ""), ("content_type", "TEXT", ""), ("storage_backend", "TEXT", ""),
                  ("storage_uri", "TEXT", ""), ("run_id", "TEXT", ""), ("created_at", "TS", "")],
      [["report_date", "kind", "filename"]], [["report_date"]]),
+    # ---------------- riset: fundamental (point-in-time), valuasi, foreign flow, akumulasi
+    # Satu baris = satu laporan (periode × tipe × sumber × versi). `first_known_date` = tanggal paling awal data
+    # boleh dipakai (max(tanggal publikasi, tanggal pertama sistem mengetahuinya)); restatement → versi baru.
+    ("financial_statements", [("id", "ID", ""), ("stock_id", "INT", "NOT NULL REFERENCES stocks(id)"),
+                              ("period_end", "DATE", "NOT NULL"), ("period_type", "TEXT", "NOT NULL"), ("fiscal_year", "INT", ""),
+                              ("currency", "TEXT", ""), ("items", "JSON", ""), ("items_hash", "TEXT", ""),
+                              ("publication_date", "DATE", ""), ("first_known_date", "DATE", "NOT NULL"),
+                              ("estimated_available_date", "DATE", ""),
+                              ("retrieved_at", "TS", ""), ("source", "TEXT", "NOT NULL"), ("version", "INT", "NOT NULL"),
+                              ("quality_status", "TEXT", ""), ("quality_notes", "TEXT", "")],
+     [["stock_id", "period_end", "period_type", "source", "version"]], [["stock_id", "first_known_date"]]),
+    ("valuation_results", [("id", "ID", ""), ("stock_id", "INT", "NOT NULL REFERENCES stocks(id)"), ("as_of_date", "DATE", "NOT NULL"),
+                           ("price", "REAL", ""), ("sector_type", "TEXT", ""), ("fair_value_low", "REAL", ""),
+                           ("fair_value_base", "REAL", ""), ("fair_value_high", "REAL", ""), ("margin_of_safety", "REAL", ""),
+                           ("margin_of_safety_conservative", "REAL", ""), ("valuation_status", "TEXT", ""),
+                           ("valuation_confidence", "TEXT", ""), ("value_score", "REAL", ""), ("quality_score", "REAL", ""),
+                           ("value_trap_risk", "TEXT", ""), ("methods", "JSON", ""), ("metrics", "JSON", ""),
+                           ("value_trap_reasons", "JSON", ""), ("fundamentals_known_date", "DATE", ""),
+                           ("fundamentals_period_end", "DATE", ""), ("data_status", "TEXT", ""), ("run_id", "TEXT", ""),
+                           ("created_at", "TS", "")],
+     [["stock_id", "as_of_date"]], [["as_of_date"]]),
+    # Foreign flow mentah per emiten per hari. Lembar (shares) dan nilai (IDR) DISIMPAN TERPISAH; nilai hanya diisi
+    # bila sumber benar-benar memberikannya (value_type ACTUAL). Estimasi lembar × harga TIDAK disimpan di sini.
+    ("foreign_flow_history", [("id", "ID", ""), ("stock_id", "INT", "NOT NULL REFERENCES stocks(id)"), ("date", "DATE", "NOT NULL"),
+                              ("market_segment", "TEXT", "NOT NULL"), ("foreign_buy_shares", "REAL", ""),
+                              ("foreign_sell_shares", "REAL", ""), ("net_foreign_shares", "REAL", ""),
+                              ("foreign_buy_value", "REAL", ""), ("foreign_sell_value", "REAL", ""),
+                              ("net_foreign_value", "REAL", ""), ("value_type", "TEXT", ""), ("total_volume_shares", "REAL", ""),
+                              ("units", "TEXT", ""), ("source", "TEXT", ""), ("source_timestamp", "TS", ""),
+                              ("retrieved_at", "TS", ""), ("quality_status", "TEXT", ""), ("quality_notes", "TEXT", "")],
+     [["stock_id", "date", "market_segment"]], [["date"]]),
+    ("accumulation_signals", [("id", "ID", ""), ("stock_id", "INT", "NOT NULL REFERENCES stocks(id)"), ("date", "DATE", "NOT NULL"),
+                              ("accumulation_score", "REAL", ""), ("distribution_risk", "REAL", ""), ("status", "TEXT", ""),
+                              ("stage", "TEXT", ""), ("confidence", "TEXT", ""), ("components", "JSON", ""),
+                              ("evidence", "JSON", ""), ("foreign_flow_status", "TEXT", ""), ("run_id", "TEXT", "")],
+     [["stock_id", "date"]], [["date"]]),
     ("schema_migrations", [("version", "INT", "PRIMARY KEY"), ("applied_at", "TS", "")], [], []),
 ]
 

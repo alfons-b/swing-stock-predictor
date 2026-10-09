@@ -1,6 +1,5 @@
 import unittest
 
-import numpy as np
 import pandas as pd
 
 from app.models.labels import add_labels

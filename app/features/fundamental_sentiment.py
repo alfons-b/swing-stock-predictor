@@ -61,7 +61,14 @@ def fundamental_risk_flags(df: pd.DataFrame, cfg: dict) -> pd.Series:
     if not fc.get("enabled", True) or "fund_debt_to_equity" not in df:
         return pd.Series(False, index=df.index)
     flag = pd.Series(False, index=df.index)
-    flag |= df["fund_debt_to_equity"] > fc.get("max_debt_to_equity", 4.0)
+    # Bank & lembaga keuangan: utang (dana pihak ketiga) adalah bahan baku bisnis → D/E 5–8× normal.
+    # Batas D/E hanya untuk sektor non-keuangan (sebelumnya semua bank akan tertolak).
+    financial = pd.Series(False, index=df.index)
+    if "sector" in df:
+        from app.valuation.valuation_metrics import FINANCIAL_TYPES, sector_type
+        sub = df["subsector"] if "subsector" in df else pd.Series(None, index=df.index)
+        financial = pd.Series([sector_type(a, b) in FINANCIAL_TYPES for a, b in zip(df["sector"], sub)], index=df.index)
+    flag |= (df["fund_debt_to_equity"] > fc.get("max_debt_to_equity", 4.0)) & ~financial
     flag |= df["fund_roe"] < fc.get("min_roe", -0.3)
     if fc.get("reject_negative_equity", True):
         flag |= df["fund_debt_to_equity"] < 0

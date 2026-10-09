@@ -85,3 +85,43 @@ def rolling_pct_rank(s: pd.Series, n: int) -> pd.Series:
 
 def slope(s: pd.Series, n: int) -> pd.Series:
     return s / s.shift(n) - 1
+
+
+# ---------------------------------------------------------------- akumulasi / distribusi (harga-volume)
+def clv(h, l, c):
+    """Close Location Value ((C−L) − (H−C)) / (H−L) ∈ [−1, 1]; H = L (tanpa range) → 0."""
+    rng = (h - l)
+    return (((c - l) - (h - c)) / rng.replace(0, np.nan)).fillna(0.0)
+
+
+def adl(h, l, c, v):
+    """Accumulation/Distribution Line (Chaikin) = Σ CLV × volume."""
+    return (clv(h, l, c) * v).cumsum()
+
+
+def cmf(h, l, c, v, n: int = 20):
+    """Chaikin Money Flow = Σ(CLV × volume) / Σ volume, n hari."""
+    mfv = (clv(h, l, c) * v).rolling(n, min_periods=n).sum()
+    return mfv / v.rolling(n, min_periods=n).sum().replace(0, np.nan)
+
+
+def mfi(h, l, c, v, n: int = 14):
+    """Money Flow Index: RSI berbobot volume atas typical price. Tidak ada aliran negatif → 100."""
+    tp = (h + l + c) / 3
+    raw = tp * v
+    d = tp.diff()
+    pos = raw.where(d > 0, 0.0).rolling(n, min_periods=n).sum()
+    neg = raw.where(d < 0, 0.0).rolling(n, min_periods=n).sum()
+    ratio = pos / neg.replace(0, np.nan)
+    out = 100 - 100 / (1 + ratio)
+    return out.where(neg != 0, 100.0).where(pos.notna())
+
+
+def rolling_vwap(h, l, c, v, n: int = 20, value=None):
+    """VWAP bergulir n hari. Bila nilai transaksi (Rp) tersedia: Σ value / Σ volume (VWAP sebenarnya);
+    selain itu pendekatan typical price × volume."""
+    if value is not None:
+        num = value.where(value > 0, ((h + l + c) / 3) * v)
+    else:
+        num = ((h + l + c) / 3) * v
+    return num.rolling(n, min_periods=n).sum() / v.rolling(n, min_periods=n).sum().replace(0, np.nan)

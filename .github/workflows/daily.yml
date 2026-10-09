@@ -36,6 +36,9 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
       MARKET_DATA_API_KEY: ${{ secrets.MARKET_DATA_API_KEY }}
+      FUNDAMENTAL_API_KEY: ${{ secrets.FUNDAMENTAL_API_KEY }}       # opsional: feed fundamental berlisensi
+      FOREIGN_FLOW_API_URL: ${{ secrets.FOREIGN_FLOW_API_URL }}     # opsional: API foreign flow vendor
+      FOREIGN_FLOW_API_KEY: ${{ secrets.FOREIGN_FLOW_API_KEY }}
       MODEL_STORAGE: ${{ vars.MODEL_STORAGE || 'auto' }}
       REPORT_STORAGE: ${{ vars.REPORT_STORAGE || 'auto' }}
       PORTFOLIO_VALUE: ${{ vars.PORTFOLIO_VALUE || '100000000' }}

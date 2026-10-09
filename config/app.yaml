@@ -11,6 +11,18 @@ database:
   # Development/test: sqlite:///data/local.db
   url: ${DATABASE_URL:-sqlite:///data/local.db}
   batch_size: 2000
+  # Supabase gratis: > 500 MB → project READ-ONLY (semua penulisan gagal). Health check: WARN ≥ 80%, FAIL ≥ 95%.
+  size_limit_mb: ${DB_SIZE_LIMIT_MB:-500}      # paket Pro: 8000
+  disk_limit_mb: ${DB_DISK_LIMIT_MB:-1024}     # ruang disk (untuk VACUUM FULL yang butuh salinan sementara)
+  size_warn_ratio: 0.80
+  auto_maintenance_ratio: 0.85                 # daily menjalankan retensi otomatis bila ukuran ≥ 85% batas
+
+retention:                                     # `python main.py db-maintenance` · workflow Database Maintenance (bulanan)
+  predictions_nonsignal_days: 180              # WAIT/AVOID lebih tua dihapus; BUY & WATCHLIST disimpan selamanya
+  reports_days: 60                             # report harian di database (salinan juga ada di artifact Actions)
+  system_logs_days: 90
+  price_history_years: 7                       # harus >= data.initial_history_years dan >= 5 (walk-forward)
+  model_artifacts_keep: 3                      # file model selain ACTIVE yang disimpan; registry & metrik tetap
 
 storage:
   model_backend: ${MODEL_STORAGE:-auto}        # auto | local | database | supabase

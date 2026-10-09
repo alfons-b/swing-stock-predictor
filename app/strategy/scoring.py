@@ -38,11 +38,18 @@ def component_scores(df: pd.DataFrame, setups: pd.DataFrame) -> pd.DataFrame:
     out["score_market_regime"] = pd.to_numeric(df["market_regime"].astype(object).map(REGIME_SCORE), errors="coerce")
     out["score_sector_strength"] = df["sector_score"]
     out["score_liquidity"] = df["liquidity_score"]
-    return out.fillna(0.0)
+    return out          # NaN = komponen tidak tersedia (mis. sektor tanpa cukup anggota) — BUKAN nol
 
 
-def technical_score(comp: pd.DataFrame, weights: dict) -> pd.Series:
-    return sum(weights[k] * comp[f"score_{k}"] for k in weights)
+def technical_score(comp: pd.DataFrame, weights: dict, min_coverage: float = 0.7) -> pd.Series:
+    """Rata-rata berbobot komponen yang TERSEDIA (bobot dinormalisasi ulang).
+
+    Sebelumnya komponen hilang diisi 0 sehingga emiten tanpa data sektor/regime dihukum (bias sistematis).
+    Bila bobot komponen tersedia < min_coverage → NaN (tidak bisa dinilai)."""
+    num = sum(weights[k] * comp[f"score_{k}"].fillna(0.0) for k in weights)
+    den = sum(weights[k] * comp[f"score_{k}"].notna() for k in weights)
+    total = sum(weights.values()) or 1.0
+    return (num / den.replace(0, np.nan)).where(den / total >= min_coverage)
 
 
 def ml_score(pred: pd.DataFrame, horizon: int) -> pd.Series:

@@ -92,6 +92,10 @@ def _save_scan(ctx: AppContext, res: dict, summary: dict, run_id: str, model_ver
         "risks": [json.dumps(r[1], ensure_ascii=False) if k else None for r, k in zip(reasons, rich)],
         "reject_reasons": sig["reject_reasons"].map(json.dumps), "run_id": run_id,
         "created_at": pd.Timestamp.now(tz="UTC").isoformat(timespec="seconds")})
+    from app.research.pipeline import PRED_RESEARCH_COLS
+    for k in PRED_RESEARCH_COLS:                       # skor riset terpisah (None bila modul/data tidak tersedia)
+        if f"research_{k}" in sig:
+            pred[k] = sig[f"research_{k}"].values
     pi, pu = repo.save_predictions(pred)
     sg = pd.DataFrame({"signal_date": d, "stock_id": ranked["ticker"].map(ids), "ticker": ranked["ticker"],
                        "rank": ranked["rank"], "decision": ranked["decision"], "setup": ranked["setup_type"],
@@ -116,20 +120,69 @@ def _save_scan(ctx: AppContext, res: dict, summary: dict, run_id: str, model_ver
     return {"predictions": len(pred), "signals": len(sg)}
 
 
-def _write_reports(ctx: AppContext, summary: dict, res: dict, df: pd.DataFrame, run_id: str, evaluation=None) -> list[str]:
+def _run_research(ctx: AppContext, df: pd.DataFrame, res: dict, run_id: str) -> dict:
+    """Valuasi, foreign flow, akumulasi, ranking terintegrasi. Gagal → dicatat, pipeline swing tetap jalan."""
+    from app.research.pipeline import attach_to_signals, run_research
+    try:
+        cols = [c for c in ("ticker", "date", "open", "high", "low", "close", "volume", "value") if c in df]
+        prices = df[cols] if {"high", "low", "volume"} <= set(cols) else \
+            ctx.repo.load_prices(start=(res["date"] - pd.Timedelta(days=400)).strftime("%Y-%m-%d"))
+        out = run_research(ctx.cfg, ctx.repo, prices, res["signals"], res["date"], run_id)
+        res["signals"] = attach_to_signals(res["signals"], out.get("table"))
+        return out
+    except Exception as e:
+        log.warning("Modul riset gagal total (pipeline swing tetap jalan): %s", e, exc_info=True, extra={"persist": True})
+        return {"summary": {"status": {"research": f"FAILED: {str(e)[:200]}"}}}
+
+
+def _write_reports(ctx: AppContext, summary: dict, res: dict, df: pd.DataFrame, run_id: str, evaluation=None,
+                   research_table: pd.DataFrame | None = None) -> list[str]:
     ds = summary["date"].replace("-", "")
     sec = sector_table(res["signals"])
     files = [("predictions_csv", f"daily_predictions_{ds}.csv", predictions_csv(res["signals"], ctx.cfg["labels"]["SWING_HORIZON"])),
              ("html", f"daily_report_{ds}.html", html_report(summary, sec, df, evaluation).encode("utf-8")),
              ("markdown", f"daily_report_{ds}.md", markdown_report(summary, sec).encode("utf-8")),
              ("summary_json", f"daily_summary_{ds}.json", json.dumps(summary, default=str, ensure_ascii=False, indent=2).encode())]
+    if research_table is not None and len(research_table):
+        from app.research.report import research_csv
+        files.append(("research_csv", f"research_rankings_{ds}.csv", research_csv(research_table)))
     uris = [ctx.reports.save(summary["date"], kind, fn, content, run_id) for kind, fn, content in files]
     log.info("Report dibuat: %s", ", ".join(fn for _, fn, _ in files), extra={"persist": True})
     return uris
 
 
+def _today(ctx: AppContext) -> pd.Timestamp:
+    return pd.Timestamp(ctx.calendar.now().date())
+
+
+def ensure_writable(ctx: AppContext) -> None:
+    """Database Supabase READ-ONLY (kuota terlampaui) → coba pulihkan dengan retensi + VACUUM FULL, lalu periksa lagi."""
+    from app.database.maintenance import run_maintenance, size_status
+    sz = size_status(ctx.cfg, ctx.db)
+    if not sz["read_only"]:
+        return
+    log.error("Database READ-ONLY (%.0f MB, batas %.0f MB) — menjalankan maintenance darurat", sz["bytes"] / 1e6,
+              sz["limit_bytes"] / 1e6)
+    res = run_maintenance(ctx.cfg, ctx.db, _today(ctx), full=True)
+    if res["after_mb"] * 1e6 >= 0.95 * sz["limit_bytes"]:
+        raise PipelineAbort(f"Database masih {res['after_mb']:.0f} MB setelah maintenance (batas {sz['limit_bytes'] / 1e6:.0f} MB). "
+                            "Kurangi retention.price_history_years / predictions_nonsignal_days, atau upgrade paket Supabase.")
+
+
+def job_db_maintenance(ctx: AppContext, dry_run: bool = False, full: bool = False) -> dict:
+    from app.database.maintenance import run_maintenance
+    if ctx.db.dialect == "postgres":  # agar run tetap bisa dicatat walau database read-only
+        ctx.db.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE")
+    with PipelineRun(ctx, "db_maintenance") as run:
+        out = run_maintenance(ctx.cfg, ctx.db, _today(ctx), dry_run=dry_run, full=full)
+        run.stats["summary"] = {k: v for k, v in out.items() if k != "table_mb"}
+        run.stats["rows_updated"] = sum(s["rows"] for s in out["steps"]) if not dry_run else 0
+        return out
+
+
 # ---------------------------------------------------------------------------------- jobs
 def job_daily(ctx: AppContext, skip_ingest: bool = False) -> dict:
+    ensure_writable(ctx)
     with PipelineRun(ctx, "daily") as run:
         h = health_check(ctx, check_provider=False)
         if not h["ok"]:
@@ -143,10 +196,12 @@ def job_daily(ctx: AppContext, skip_ingest: bool = False) -> dict:
         model, version = _load_model(ctx)
         run.stats["model_version"] = version
         res = scan_day(ctx.cfg, df, model, fresh)
+        research = _run_research(ctx, df, res, run.run_id)
         summary = summarize_scan(ctx.cfg, res, model, version, fresh, ctx.is_synthetic(), _driver_features(ctx, model))
+        summary["research"] = research.get("summary", {})
         saved = _save_scan(ctx, res, summary, run.run_id, version)
         evaluation = evaluate_predictions(ctx.cfg, ctx.repo)
-        uris = _write_reports(ctx, summary, res, df, run.run_id, evaluation)
+        uris = _write_reports(ctx, summary, res, df, run.run_id, evaluation, research.get("table"))
         run.stats["summary"] = {"headline": summary["headline"], "date": summary["date"], "regime": summary["market_regime"],
                                 "top": [r["ticker"] for r in summary["recommendations"]], "freshness": fresh, "saved": saved,
                                 "evaluation": evaluation, "reports": uris, "ingestion": ingest.get("ingestion", {}).get("provider_stats")}
@@ -155,6 +210,14 @@ def job_daily(ctx: AppContext, skip_ingest: bool = False) -> dict:
             notify_daily(summary)
         except Exception as e:
             log.warning("Notifikasi gagal: %s", e)
+        try:  # cegah kuota database terlampaui (Supabase gratis → read-only di 500 MB)
+            from app.database.maintenance import run_maintenance, size_status
+            sz = size_status(ctx.cfg, ctx.db)
+            if sz["maintenance_due"]:
+                log.warning("Database %.0f MB (%.0f%% batas) — retensi otomatis dijalankan", sz["bytes"] / 1e6, 100 * sz["ratio"])
+                run.stats["summary"]["maintenance"] = run_maintenance(ctx.cfg, ctx.db, _today(ctx))["after_mb"]
+        except Exception as e:
+            log.warning("Maintenance otomatis gagal: %s", e)
         if run.status == "RUNNING":  # status final ditulis saat keluar dari `with`; nilai yang sama ditampilkan CLI
             run.status = "SUCCESS"
         summary["run_id"] = run.run_id

@@ -9,7 +9,6 @@ import pandas as pd
 import yaml
 
 from app.config import get, resolve_path
-from app.data.schema import conform_universe
 from app.data.tickers import normalize_ticker
 from app.database.repository import Repository, now_utc
 from app.utils.logging_utils import get_logger

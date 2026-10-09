@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-import numpy as np
 import pandas as pd
 
 from app.database.db import Database
@@ -245,6 +244,14 @@ class Repository:
             sql = self.db._sql("INSERT INTO system_logs (run_id, ts, level, logger, message) VALUES (?, ?, ?, ?, ?)")
             cur.executemany(sql, [(r["run_id"], r["ts"], r["level"], r["logger"], r["message"][:4000]) for r in rows])
             self.db.conn.commit()
+
+    def set_source_availability(self, name: str, category: str, status: str, detail: str = "", priority: int = 50) -> None:
+        """Status ketersediaan sumber riset (fundamental / foreign flow / broker) — tampil di Data Health."""
+        self.db.upsert("data_sources", [{"name": name, "type": category, "category": category, "priority": priority,
+                                         "enabled": status != "DISABLED", "status": status, "detail": (detail or "")[:1000],
+                                         "checked_at": now_utc()}],
+                       keys=["name"], update=["type", "category", "priority", "enabled", "status", "detail", "checked_at"],
+                       count=False)
 
     def source_status(self, name: str, type_: str, priority: int, enabled: bool, ok: bool, error: str | None = None,
                       rows: int = 0) -> None:

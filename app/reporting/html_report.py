@@ -7,7 +7,6 @@ Chart dibuat sebagai SVG inline sehingga file bisa dibuka offline di browser apa
 from __future__ import annotations
 
 import html
-from pathlib import Path
 
 import numpy as np
 import pandas as pd

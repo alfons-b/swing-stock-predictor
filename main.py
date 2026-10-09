@@ -6,7 +6,7 @@ Production: GitHub Actions menjalankan `python main.py daily` (terjadwal atau ma
   python main.py update-data       python main.py validate-data     python main.py features
   python main.py train             python main.py evaluate          python main.py backtest
   python main.py scan              python main.py predict BBCA      python main.py models
-  python main.py make-sample       python main.py db-schema
+  python main.py make-sample       python main.py db-schema       python main.py db-maintenance [--dry-run] [--full]
 
 Opsi global: --config DIR  --set key=value  --as-of YYYY-MM-DD (simulasi tanggal; untuk test/backfill)
 Exit code: 0 sukses, 1 gagal (GitHub Actions → FAILED), 2 config salah, 3 health kritis gagal.
@@ -17,6 +17,8 @@ import argparse
 import json
 import sys
 import warnings
+
+import pandas as pd
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -181,6 +183,22 @@ def cmd_models(cfg, a):
     return 0
 
 
+def cmd_db_maintenance(cfg, a):
+    from app.pipeline.jobs import job_db_maintenance
+    out = job_db_maintenance(_ctx(cfg), dry_run=a.dry_run, full=a.full)
+    print(f"Ukuran database: {out['before_mb']} MB → {out['after_mb']} MB (batas {out['limit_mb']} MB)"
+          + ("   [DRY-RUN: tidak ada yang dihapus]" if out["dry_run"] else ""))
+    for s in out["steps"]:
+        print(f"  {s['rows']:>9,}  {s['step']}")
+    if out["vacuumed"]:
+        print("VACUUM: " + ", ".join(out["vacuumed"]))
+    if not out["full"] and not out["dry_run"]:
+        print("Catatan: ruang terhapus kini dipakai ulang (database berhenti membesar). Angka ukuran baru turun "
+              "setelah --full (VACUUM FULL, mengunci tabel sebentar).")
+    print("Tabel terbesar: " + ", ".join(f"{t} {mb} MB" for t, mb in list(out["table_mb"].items())[:5]))
+    return 0
+
+
 def cmd_make_sample(cfg, a):
     from app.data.sample import generate_sample_dataset
     out = resolve_path(cfg, a.out)
@@ -194,6 +212,80 @@ def cmd_db_schema(cfg, a):
     p = resolve_path(cfg, "sql/schema_postgres.sql")
     p.write_text(postgres_sql_file(), encoding="utf-8")
     print(f"Skema PostgreSQL ditulis ke {p}")
+    return 0
+
+
+def _as_of(cfg, a):
+    return getattr(a, "date", None) or cfg.get("_as_of")
+
+
+def cmd_research(cfg, a):
+    from app.data.tickers import normalize_ticker
+    from app.research.report import build_research, stock_report
+    ctx = _ctx(cfg)
+    t = normalize_ticker(a.ticker)
+    res = build_research(cfg, ctx.repo, _as_of(cfg, a), tickers=[t])
+    print(stock_report(res, t))
+    return 0
+
+
+def cmd_rankings(cfg, a):
+    from app.research.integrated_scoring import top
+    from app.research.report import build_research
+    res = build_research(cfg, _ctx(cfg).repo, _as_of(cfg, a))
+    cols = ["ticker", f"score_{a.ranking}", "value_decision", "swing_decision", "valuation_status", "value_trap_risk",
+            "foreign_flow_status", "accumulation_status"]
+    t = top(res["table"], a.ranking, a.top)
+    print(f"Ranking {a.ranking} — {res['as_of']:%Y-%m-%d} ({len(t)} emiten berdata cukup)")
+    print(t.reindex(columns=cols).to_string(index=False) if len(t) else "Tidak ada emiten dengan data cukup.")
+    return 0
+
+
+def cmd_fundamentals_update(cfg, a):
+    from app.valuation.fundamental_provider import update_fundamentals
+    ctx = _ctx(cfg)
+    tickers = [x.strip().upper() for x in a.tickers.split(",")] if a.tickers else None
+    st = update_fundamentals(cfg, ctx.repo, _as_of(cfg, a) or pd.Timestamp.today(), tickers)
+    for n, p in st["providers"].items():
+        print(f"  {n:<22} {p['status']:<15} {p['detail']}")
+    print(f"Dicek {st['checked']} emiten, {st['new_versions']} versi laporan baru, {st['failed']} tanpa data")
+    return 0
+
+
+def cmd_fundamentals_template(cfg, a):
+    from app.valuation.fundamental_provider import csv_template
+    out = resolve_path(cfg, a.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    print(f"Template fundamental: {csv_template(out)} (isi dari laporan keuangan resmi; satuan penuh mata uang laporan)")
+    return 0
+
+
+def cmd_foreign_flow_update(cfg, a):
+    from app.flows.foreign_flow_provider import update_foreign_flow
+    st = update_foreign_flow(cfg, _ctx(cfg).repo, _as_of(cfg, a) or pd.Timestamp.today(), full=a.full)
+    for n, p in st["providers"].items():
+        print(f"  {n:<24} {p['status']:<15} {p.get('rows', '')} {p['detail']}")
+    print(f"Foreign flow: {st['status']} ({st['rows']} baris)")
+    return 0
+
+
+def cmd_valuation(cfg, a):
+    from app.valuation.valuation_report import run_valuation, save_valuations
+    ctx = _ctx(cfg)
+    d = _as_of(cfg, a) or ctx.repo.max_price_date()
+    df = run_valuation(cfg, ctx.repo, d, use_estimated=a.estimated_pit)
+    if not a.no_save and not a.estimated_pit:
+        save_valuations(ctx.repo, df)
+    print(df["valuation_status"].value_counts().to_string() if len(df) else "Tidak ada emiten aktif")
+    return 0
+
+
+def cmd_evaluate_modules(cfg, a):
+    from app.research.evaluation import evaluate_modules, format_evaluation
+    res = evaluate_modules(cfg, _ctx(cfg).repo, use_estimated=a.estimated_pit, save=not a.no_save)
+    print(format_evaluation(res))
+    if a.json:
+        print(json.dumps(res, default=str, indent=2))
     return 0
 
 
@@ -220,6 +312,27 @@ def build_parser():
     s.add_argument("--start", default="2017-01-02"); s.add_argument("--end", default="2026-10-02"); s.add_argument("--seed", type=int, default=7)
     s.set_defaults(fn=cmd_make_sample)
     sub.add_parser("db-schema").set_defaults(fn=cmd_db_schema)
+    s = sub.add_parser("db-maintenance", help="retensi data + VACUUM (cegah kuota Supabase terlampaui)")
+    s.add_argument("--dry-run", action="store_true", help="tampilkan yang akan dihapus tanpa menghapus")
+    s.add_argument("--full", action="store_true", help="VACUUM FULL: ukuran database benar-benar turun")
+    s.set_defaults(fn=cmd_db_maintenance)
+    s = sub.add_parser("research", help="STOCK RESEARCH REPORT satu emiten"); s.add_argument("ticker"); s.add_argument("--date")
+    s.set_defaults(fn=cmd_research)
+    s = sub.add_parser("rankings", help="ranking riset terintegrasi"); s.add_argument("--date"); s.add_argument("--top", type=int, default=20)
+    s.add_argument("--ranking", default="integrated", choices=["best_value", "quality_value", "accumulation", "foreign_buying",
+                   "swing_setup", "value_accumulation", "value_swing", "momentum_flow", "integrated"]); s.set_defaults(fn=cmd_rankings)
+    s = sub.add_parser("fundamentals-update"); s.add_argument("--tickers", help="BBCA,TLKM (default: incremental)"); s.add_argument("--date")
+    s.set_defaults(fn=cmd_fundamentals_update)
+    s = sub.add_parser("fundamentals-template"); s.add_argument("--out", default="data/raw/fundamentals/template.csv")
+    s.set_defaults(fn=cmd_fundamentals_template)
+    s = sub.add_parser("foreign-flow-update"); s.add_argument("--full", action="store_true"); s.add_argument("--date")
+    s.set_defaults(fn=cmd_foreign_flow_update)
+    s = sub.add_parser("valuation"); s.add_argument("--date"); s.add_argument("--no-save", action="store_true")
+    s.add_argument("--estimated-pit", action="store_true", help="riset: estimasi tanggal publikasi (berlabel ESTIMATED_PIT, tidak disimpan)")
+    s.set_defaults(fn=cmd_valuation)
+    s = sub.add_parser("evaluate-modules", help="evaluasi historis 9 varian + IC faktor")
+    s.add_argument("--estimated-pit", action="store_true"); s.add_argument("--no-save", action="store_true"); s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_evaluate_modules)
     return p
 
 

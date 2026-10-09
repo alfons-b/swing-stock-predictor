@@ -65,3 +65,30 @@ def evaluate_predictions(cfg: dict, repo: Repository, prices: pd.DataFrame | Non
     log.info("Evaluasi prediksi: %d dievaluasi, %d masih menunggu horizon", len(rows), len(pend) - len(rows),
              extra={"persist": True})
     return {"pending": int(len(pend) - len(rows)), "evaluated": len(rows)}
+
+
+def live_calibration(repo: Repository, days: int = 120, bins: int = 10, min_n: int = 300) -> dict:
+    """Monitoring kalibrasi prediksi LIVE (out-of-sample sejati): ECE & Brier prob_bullish vs kelas aktual,
+    plus hit rate BUY per regime. n < min_n → INSUFFICIENT_DATA (tidak disimpulkan)."""
+    since = (pd.Timestamp.now() - pd.Timedelta(days=days)).strftime("%Y-%m-%d")
+    df = repo.db.query_df("SELECT p.prob_bullish, p.decision, p.market_regime, e.actual_class, e.outcome "
+                          "FROM prediction_evaluations e JOIN predictions p ON p.id = e.prediction_id "
+                          "WHERE p.prediction_date >= ? AND e.actual_class IS NOT NULL", (since,))
+    out = {"window_days": days, "n": int(len(df))}
+    if len(df) < min_n:
+        out["status"] = "INSUFFICIENT_DATA"
+        return out
+    p = pd.to_numeric(df["prob_bullish"], errors="coerce")
+    y = (pd.to_numeric(df["actual_class"], errors="coerce") == 2).astype(float)
+    ok = p.notna()
+    p, y = p[ok], y[ok]
+    b = np.minimum((p * bins).astype(int), bins - 1)
+    ece = float(sum((b == k).mean() * abs(p[b == k].mean() - y[b == k].mean()) for k in range(bins) if (b == k).any()))
+    out.update(status="OK", ece_bullish=round(ece, 4), brier_bullish=round(float(((p - y) ** 2).mean()), 4),
+               mean_prob_bullish=round(float(p.mean()), 4), realized_bullish_rate=round(float(y.mean()), 4))
+    buys = df[df["decision"] == "BUY"]
+    if len(buys):
+        win = buys["outcome"].isin(["TP1", "TP2", "TP1_THEN_STOP"])
+        out["buy_hit_rate_by_regime"] = {str(k): {"n": int(len(g)), "tp_hit_rate": round(float(win[g.index].mean()), 3)}
+                                         for k, g in buys.groupby(buys["market_regime"].fillna("UNKNOWN"))}
+    return out

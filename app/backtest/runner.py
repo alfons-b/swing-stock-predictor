@@ -14,8 +14,9 @@ import pandas as pd
 
 from app.backtest.engine import BacktestEngine, benchmark_buy_hold
 from app.backtest.walk_forward import make_folds
-from app.config import config_hash, get
+from app.config import config_hash
 from app.models.trainer import walk_forward_predict
+from app.risk.concentration import apply_concentration_limits
 from app.scanner.ranking import generate_signals, rank_signals
 from app.utils.logging_utils import get_logger
 
@@ -43,11 +44,12 @@ def neutral_predictions(index, horizon: int) -> pd.DataFrame:
 def _run_period(cfg, df, pred, start, end) -> dict:
     pcols = prediction_columns(pred)
     feat = df.merge(pred[["date", "ticker"] + pcols], on=["date", "ticker"], how="inner")
-    ranked = rank_signals(generate_signals(feat.drop(columns=pcols), feat[pcols], cfg), cfg)
+    ranked = rank_signals(apply_concentration_limits(generate_signals(feat.drop(columns=pcols), feat[pcols], cfg), cfg, df), cfg)
     res = BacktestEngine(cfg).run(ranked, df, start, end)
     tcfg = technical_only_cfg(cfg)
     base = feat.drop(columns=pcols)
-    r_t = rank_signals(generate_signals(base, neutral_predictions(base.index, cfg["labels"]["SWING_HORIZON"]), tcfg), tcfg)
+    r_t = rank_signals(apply_concentration_limits(
+        generate_signals(base, neutral_predictions(base.index, cfg["labels"]["SWING_HORIZON"]), tcfg), tcfg, df), tcfg)
     res_t = BacktestEngine(tcfg).run(r_t, df, start, end)
     index = df[["date", "idx_close"]].drop_duplicates("date").rename(columns={"idx_close": "close"})
     return {"strategy": res["metrics"], "technical_only": res_t["metrics"],

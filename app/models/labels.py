@@ -6,7 +6,6 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from app.config import get
 
 
 def _future_stack(s: pd.Series, h: int) -> np.ndarray:

@@ -1,4 +1,4 @@
-"""Pemuatan konfigurasi: config/app.yaml + sources.yaml + model.yaml + trading.yaml digabung jadi satu dict.
+"""Pemuatan konfigurasi: config/app.yaml + sources.yaml + model.yaml + trading.yaml (+ research.yaml) digabung jadi satu dict.
 
 - `${VAR:-default}` disubstitusi dari environment SEBELUM parsing YAML (tipe angka/bool tetap benar).
 - Secrets (DATABASE_URL, SUPABASE_KEY, ...) hanya dari environment / GitHub Secrets, tidak pernah dari file.
@@ -17,6 +17,7 @@ from typing import Any
 import yaml
 
 CONFIG_FILES = ["app.yaml", "sources.yaml", "model.yaml", "trading.yaml"]
+OPTIONAL_CONFIG_FILES = ["research.yaml"]   # valuasi / foreign flow / akumulasi (default aman bila tidak ada)
 _ENV = re.compile(r"\$\{([A-Z0-9_]+)(?::-([^}]*))?\}")
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -65,9 +66,11 @@ def load_config(config_dir: str | Path | None = None, overrides: list[str] | Non
     if not cdir.is_absolute():
         cdir = (Path.cwd() / cdir) if (Path.cwd() / cdir).exists() else ROOT / cdir
     cfg: dict = {}
-    for name in CONFIG_FILES:
+    for name in CONFIG_FILES + OPTIONAL_CONFIG_FILES:
         p = cdir / name
         if not p.exists():
+            if name in OPTIONAL_CONFIG_FILES:
+                continue
             raise ConfigError(f"File config tidak ditemukan: {p}")
         cfg = _deep_merge(cfg, yaml.safe_load(_substitute_env(p.read_text(encoding="utf-8"))) or {})
     for item in overrides or []:
@@ -107,6 +110,10 @@ def validate_config(cfg: dict) -> None:
         raise ConfigError("Isi strategy.MIN_CONFIDENCE atau strategy.MIN_PROB_EDGE")
     if not 0 < float(get(cfg, "portfolio.RISK_PER_TRADE")) <= 0.05:
         raise ConfigError("RISK_PER_TRADE harus di (0, 0.05]")
+    keep = get(cfg, "retention.price_history_years")
+    if keep is not None and (float(keep) < float(get(cfg, "data.initial_history_years", 0) or 0) or float(keep) < 5):
+        raise ConfigError("retention.price_history_years harus >= data.initial_history_years dan >= 5 "
+                          "(walk-forward butuh ±4,7 tahun histori)")
     if get(cfg, "split.mode") not in ("rolling", "fixed"):
         raise ConfigError("split.mode harus rolling atau fixed")
 

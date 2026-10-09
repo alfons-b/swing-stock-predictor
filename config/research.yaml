@@ -1,0 +1,123 @@
+# Modul riset: fundamental, valuasi, foreign flow, akumulasi/distribusi, ranking terintegrasi.
+# Semua angka ASUMSI di bawah bukan data pasar — tinjau & perbarui berkala. Tidak ada secret di file ini.
+
+fundamentals:
+  # Provider dicoba berurutan (priority kecil = lebih dulu). Tanpa sumber yang AVAILABLE → valuasi INSUFFICIENT_DATA.
+  providers:
+    - name: idx_fundamentals       # feed laporan keuangan resmi/berlisensi (point-in-time). Butuh kredensial.
+      type: idx
+      enabled: false
+      priority: 1
+      api_key: ${FUNDAMENTAL_API_KEY:-}
+    - name: csv_fundamentals       # file kanonik data/raw/fundamentals/*.csv|xlsx (template: python main.py fundamentals-template)
+      type: csv
+      enabled: true
+      priority: 2
+      dir: ${FUNDAMENTAL_CSV_DIR:-data/raw/fundamentals}
+      point_in_time: true          # true hanya bila kolom publication_date diisi dari tanggal publikasi asli
+    - name: yahoo_fundamentals     # snapshot terbaru; first_known_date = tanggal diambil (aman untuk live, bukan backtest lampau)
+      type: yahoo
+      enabled: ${YAHOO_ENABLED:-true}
+      priority: 3
+      suffix: ".JK"
+  refresh_days: 7                  # emiten dicek ulang paling cepat tiap N hari (incremental)
+  max_per_run: 150                 # maksimal emiten per daily run (±920 emiten tersegarkan ±1×/minggu)
+  price_currency: IDR
+  # Estimasi tanggal publikasi bila tanggal asli tidak diketahui — HANYA untuk riset backtest, diberi label ESTIMATED_PIT.
+  # Batas regulasi OJK: tahunan ≤ akhir bulan ke-3 (diaudit), kuartalan ≤ 1–3 bulan; jeda di bawah sengaja konservatif.
+  estimated_publication_lag_days: {FY: 150, Q: 100}
+  backtest_allow_estimated_pit: false
+  # Kurs untuk laporan non-IDR (mis. emiten batubara melaporkan USD). File CSV: date,currency,rate_idr.
+  # Tanpa kurs → multiples & fair value emiten tsb INSUFFICIENT_DATA (tidak ditebak).
+  fx_file: ${FX_FILE:-data/raw/fx/fx_rates.csv}
+  stale_after_days: 450            # laporan terbaru lebih tua dari ini → peringatan data basi
+
+valuation:
+  enabled: true
+  # ASUMSI — perbarui: yield SBN 10 tahun & equity risk premium Indonesia. Bukan data real-time.
+  assumptions_as_of: "2026-10-09"  # tanggal asumsi terakhir ditinjau; health WARN bila > 180 hari
+  risk_free_rate: 0.068
+  equity_risk_premium: 0.075
+  default_beta: 1.0
+  cost_of_debt_pre_tax: 0.09
+  tax_rate: 0.22
+  terminal_growth: 0.04            # nominal jangka panjang, konservatif di bawah pertumbuhan PDB nominal
+  max_explicit_growth: 0.15
+  explicit_years: 5
+  sensitivity: {discount_rate_step: 0.01, terminal_growth_step: 0.005}
+  min_peers: 5                     # perbandingan relatif butuh ≥ N emiten pembanding valid
+  min_history_months: 24           # valuasi historis (persentil multiple sendiri) butuh ≥ N bulan
+  history_years: 5
+  min_method_weight: 0.4           # bobot metode valid < ini → INSUFFICIENT_DATA
+  # bobot metode per tipe sektor (dinormalisasi ulang atas metode yang valid)
+  method_weights:
+    BANK: {justified_pb: 0.40, relative: 0.30, historical: 0.20, dividend: 0.10}
+    FINANCIAL: {justified_pb: 0.25, relative: 0.35, historical: 0.30, dividend: 0.10}
+    COMMODITY: {relative: 0.35, dcf: 0.20, historical: 0.30, dividend: 0.15}
+    PROPERTY: {relative: 0.40, historical: 0.35, dcf: 0.15, dividend: 0.10}
+    GENERAL: {dcf: 0.35, relative: 0.30, historical: 0.25, dividend: 0.10}
+    UNKNOWN: {relative: 0.40, historical: 0.40, dividend: 0.20}
+  status_thresholds: {deep_value: 0.40, undervalued: 0.20, overvalued: -0.15}
+  store_daily_days: 14             # valuation_results harian disimpan N hari; lebih lama hanya akhir bulan (±2,4 KB/emiten/hari)
+
+foreign_flow:
+  enabled: true
+  # Data BEI: foreign buy/sell harian dalam LEMBAR. Nilai rupiah resmi tidak selalu tersedia →
+  # nilai = lembar × VWAP/close diberi label ESTIMATED_VALUE.
+  providers:
+    - name: idx_stock_summary_file # file "Ringkasan Saham" yang diunduh manual dari idx.co.id (xlsx/csv), satu file per hari
+      type: idx_file
+      enabled: true
+      priority: 1
+      dir: ${FOREIGN_FLOW_DIR:-data/raw/foreign_flow}
+    - name: csv_foreign_flow       # CSV kanonik: date,ticker,foreign_buy_shares,foreign_sell_shares[,..._value,market_segment]
+      type: csv
+      enabled: true
+      priority: 2
+      dir: ${FOREIGN_FLOW_CSV_DIR:-data/raw/foreign_flow_csv}
+    - name: http_foreign_flow      # API pihak ketiga berlisensi (JSON). Butuh URL + key; mati bila kosong.
+      type: http
+      enabled: false
+      priority: 3
+      url: ${FOREIGN_FLOW_API_URL:-}
+      api_key: ${FOREIGN_FLOW_API_KEY:-}
+    - name: idx_endpoint           # endpoint publik situs BEI. MATI default: memblokir IP datacenter & ketentuan
+      type: idx_endpoint           # penggunaan situs tidak mengizinkan pengambilan otomatis massal. Aktifkan
+      enabled: false               # hanya bila Anda punya izin tertulis.
+      priority: 9
+  min_coverage: 0.8                # cakupan hari bursa dalam jendela < 80% → INSUFFICIENT_DATA
+  windows: [5, 20, 60]
+
+broker_summary:
+  enabled: false                   # broker summary butuh data berlisensi; antarmuka tersedia (app/accumulation/broker_flow.py)
+  dir: ${BROKER_SUMMARY_DIR:-data/raw/broker_summary}
+
+accumulation:
+  enabled: true
+  window: 20
+  long_window: 60
+  rvol_window: 20
+  store_neutral: false             # simpan hanya sinyal non-netral ke accumulation_signals (hemat storage)
+  thresholds: {strong: 75, moderate: 60, weak_distribution: 40, strong_distribution: 25}
+
+research_scoring:
+  # Composite tiap ranking = rata-rata berbobot skor yang TERSEDIA (bobot dinormalisasi ulang); skor hilang ≠ 0.
+  min_weight_coverage: 0.6
+  rankings:
+    best_value: {value_score: 0.6, business_quality_score: 0.25, value_risk_inverse: 0.15}
+    quality_value: {value_score: 0.4, business_quality_score: 0.45, value_risk_inverse: 0.15}
+    accumulation: {accumulation_score: 0.6, distribution_risk_inverse: 0.2, liquidity_score: 0.2}
+    foreign_buying: {foreign_flow_score: 0.7, liquidity_score: 0.3}
+    swing_setup: {technical_setup_score: 0.45, ml_probability_score: 0.35, market_regime_score: 0.2}
+    value_accumulation: {value_score: 0.35, accumulation_score: 0.3, foreign_flow_score: 0.15, value_risk_inverse: 0.2}
+    value_swing: {value_score: 0.3, technical_setup_score: 0.3, ml_probability_score: 0.25, value_risk_inverse: 0.15}
+    momentum_flow: {technical_setup_score: 0.35, accumulation_score: 0.3, foreign_flow_score: 0.2, market_regime_score: 0.15}
+    integrated: {value_score: 0.2, business_quality_score: 0.15, accumulation_score: 0.15, foreign_flow_score: 0.1,
+                 technical_setup_score: 0.15, ml_probability_score: 0.15, value_risk_inverse: 0.05, distribution_risk_inverse: 0.05}
+  max_per_sector_buy: 2            # batas emiten per sektor di daftar BUY (konsentrasi)
+  max_pair_correlation: 0.8        # kandidat BUY dengan korelasi return 60H > ini terhadap kandidat lebih tinggi → WATCHLIST
+  correlation_window: 60
+
+research_retention:                # `python main.py db-maintenance` (juga otomatis saat database ≥ 85% kuota)
+  accumulation_signals_days: 365
+  foreign_flow_years: 7            # ±200 B/baris → ±45 MB/tahun untuk ±920 emiten; laporan keuangan TIDAK pernah dihapus
