@@ -42,7 +42,9 @@ pipeline:
 
 data:
   incremental: true
-  initial_history_years: 10
+  # 6 th: cukup untuk 4 fold walk-forward (butuh ~4,7 th) dan muat di Supabase gratis (500 MB):
+  # price_history ≈ 200 byte/baris → ~950 emiten × 6 th ≈ 275 MB; × 10 th ≈ 455 MB (terlalu besar untuk paket gratis).
+  initial_history_years: 6
   start_date: null                             # null = hari ini - initial_history_years
   index_id: COMPOSITE
   overlap_days: 0                              # 0 = hanya tanggal yang hilang

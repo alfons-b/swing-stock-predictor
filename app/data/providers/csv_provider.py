@@ -12,7 +12,7 @@ from pathlib import Path
 import pandas as pd
 
 from app.config import resolve_path
-from app.data.providers.base import MarketDataProvider, ProviderError
+from app.data.providers.base import MarketDataProvider, ProviderError, ProviderUnavailable
 from app.data.schema import conform_prices, conform_universe
 from app.data.tickers import normalize_ticker
 
@@ -28,6 +28,8 @@ class CSVProvider(MarketDataProvider):
     def __init__(self, entry, cfg):
         super().__init__(entry, cfg)
         self.dir = resolve_path(cfg, str(entry.get("dir", "data/raw/sample")))
+        if not (self.dir / "prices.csv").exists():
+            raise ProviderUnavailable(f"folder CSV {self.dir} tidak berisi prices.csv")
         meta = self.dir / "metadata.json"
         self.metadata = json.loads(meta.read_text()) if meta.exists() else {}
         self.is_synthetic = bool(self.metadata.get("synthetic", False))

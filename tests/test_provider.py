@@ -79,3 +79,21 @@ class TestProviders(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestProviderAvailability(unittest.TestCase):
+    def test_csv_without_data_is_skipped(self):
+        """Regresi: cadangan CSV tanpa folder data di runner cloud dulu menghasilkan 41 'gagal' + PARTIAL_SUCCESS."""
+        from app.data.providers.chain import make_providers
+        cfg = make_cfg()
+        cfg["market_data"]["providers"] = [dict(cfg["market_data"]["providers"][0], dir="/tidak/ada")]
+        self.assertEqual(make_providers(cfg), [])
+
+    def test_no_data_status_not_overwritten_by_fallback_error(self):
+        cfg = make_cfg()
+        empty = Flaky(cfg, fail_times=0, bad=("ARMY",), prio=1)        # provider merespons, tapi tanpa data ARMY
+        broken = Flaky(cfg, fail_times=99, bad=(), prio=2)              # cadangan yang error
+        res = ProviderChain(cfg, [empty, broken], sleep=lambda s: None).fetch_prices(
+            {"ARMY": pd.Timestamp("2024-01-01"), "BBCA": pd.Timestamp("2024-01-01")}, pd.Timestamp("2024-01-03"))
+        self.assertIn("BBCA", res.frames)
+        self.assertTrue(res.failed["ARMY"].endswith("tidak ada data baru"))

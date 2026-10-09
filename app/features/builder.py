@@ -13,6 +13,32 @@ from app.utils.logging_utils import get_logger
 
 log = get_logger(__name__)
 
+FEATURE_ABS_MAX = 1e6  # rasio keuangan > 1 juta tidak bermakna; juga menjaga nilai tetap aman untuk float32
+
+
+def sanitize_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Jaring pengaman terakhir: ±inf → NaN dan nilai ekstrem dipotong ke ±FEATURE_ABS_MAX untuk semua kolom f_*."""
+    cols = [c for c in df.columns if c.startswith("f_")]
+    if not cols:
+        return df
+    # kolom per kolom → puncak memori ±1 kolom (dataset production ±1,7 jt baris × 85 fitur)
+    n_extreme, fixed = 0, {}
+    for c in cols:
+        arr = df[c].to_numpy(dtype=float, copy=True)
+        with np.errstate(invalid="ignore"):
+            arr[~np.isfinite(arr)] = np.nan
+            big = np.abs(arr) > FEATURE_ABS_MAX
+        if big.any():
+            n_extreme += int(big.sum())
+            np.clip(arr, -FEATURE_ABS_MAX, FEATURE_ABS_MAX, out=arr)
+            fixed[c] = arr
+    if n_extreme:
+        log.warning("%d nilai fitur ekstrem (>|%g|) dipotong di %d kolom", n_extreme, FEATURE_ABS_MAX, len(fixed))
+        for c, arr in fixed.items():  # hanya kolom yang benar-benar berubah yang ditulis ulang
+            df[c] = arr
+    return df
+
+
 REGIME_FEATURES = ["idx_ret5", "idx_ret20", "idx_ret60", "idx_dist_sma50", "idx_dist_sma200", "idx_vol20",
                    "idx_vol_pct", "breadth_above_sma50", "breadth_adv_ratio", "regime_score", "regime_code"]
 SECTOR_FEATURES = ["sector_ret5", "sector_ret20", "sector_ret60", "sector_breadth", "sector_rs20", "sector_score"]
@@ -47,7 +73,7 @@ def build_features(market: dict, cfg: dict) -> pd.DataFrame:
         df["f_news_sent5"] = df["news_sent5"]
         df["f_news_count5"] = df["news_count5"]
     df = add_liquidity(df, cfg)
-    df = df.replace([np.inf, -np.inf], np.nan)
+    df = sanitize_features(df.replace([np.inf, -np.inf], np.nan))
     return df.sort_values(["date", "ticker"]).reset_index(drop=True)
 
 

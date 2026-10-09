@@ -121,3 +121,61 @@ class TestMigration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestUniverseResolution(unittest.TestCase):
+    """Regresi: daftar contoh 40 emiten tidak boleh diam-diam dipakai sebagai 'seluruh BEI'."""
+
+    def _cfg(self, root):
+        cfg = make_cfg()
+        cfg["_root"] = str(root)
+        (root / "config").mkdir(parents=True, exist_ok=True)
+        cfg["universe"]["file"] = "config/universe.xlsx"
+        return cfg
+
+    def _write_example(self, root):
+        from tests.helpers import ROOT
+        (root / "config" / "universe.example.csv").write_text((ROOT / "config" / "universe.example.csv").read_text())
+
+    def test_example_used_and_flagged_when_no_user_file(self):
+        from app.data.universe_file import resolve_universe_file
+        root = tmpdir()
+        cfg = self._cfg(root)
+        self._write_example(root)
+        p, is_example = resolve_universe_file(cfg)
+        self.assertEqual((p.name, is_example), ("universe.example.csv", True))
+
+    def test_copy_of_example_under_user_name_is_still_flagged(self):
+        from app.data.universe_file import resolve_universe_file
+        root = tmpdir()
+        cfg = self._cfg(root)
+        self._write_example(root)
+        (root / "config" / "universe.csv").write_text((root / "config" / "universe.example.csv").read_text())
+        p, is_example = resolve_universe_file(cfg)
+        self.assertEqual((p.name, is_example), ("universe.csv", True))
+
+    def test_user_file_preferred(self):
+        from app.data.universe_file import resolve_universe_file
+        root = tmpdir()
+        cfg = self._cfg(root)
+        self._write_example(root)
+        pd.DataFrame(IDX_ROWS).to_excel(root / "config" / "universe.xlsx", index=False)
+        p, is_example = resolve_universe_file(cfg)
+        self.assertEqual((p.name, is_example), ("universe.xlsx", False))
+
+    def test_health_warns_on_example_universe(self):
+        from app.pipeline.health import health_check
+        root = tmpdir()
+        cfg = self._cfg(root)
+        self._write_example(root)
+        cfg["database"]["url"] = f"sqlite:///{root / 'h.db'}"
+        cfg["market_data"]["providers"] = [{"name": "idx", "type": "idx", "enabled": True, "priority": 1},
+                                           {**make_cfg()["market_data"]["providers"][0], "priority": 99}]
+        ctx = make_ctx(cfg)
+        UniverseManager(cfg, ctx.repo, ctx.chain).update()
+        h = health_check(ctx, check_provider=False)
+        self.assertEqual(h["checks"]["UNIVERSE"]["status"], "WARN")
+        self.assertIn("DAFTAR CONTOH", h["checks"]["UNIVERSE"]["detail"])
+        pd.DataFrame(IDX_ROWS).to_excel(root / "config" / "universe.xlsx", index=False)
+        UniverseManager(cfg, ctx.repo, ctx.chain).update()
+        self.assertEqual(health_check(ctx, check_provider=False)["checks"]["UNIVERSE"]["status"], "OK")

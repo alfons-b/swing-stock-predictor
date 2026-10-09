@@ -65,7 +65,20 @@ def health_check(ctx, check_provider: bool = True) -> dict:
         except Exception as e:
             put("MARKET DATA PROVIDER", "FAIL", f"{type(e).__name__}: {e}"[:200])
     n_active = int(ctx.db.scalar("SELECT COUNT(*) FROM stocks WHERE is_active = ?", (True,)) or 0)
-    put("UNIVERSE", "OK" if n_active > 0 else "EMPTY", f"{n_active} emiten aktif")
+    from app.data.universe_file import resolve_universe_file
+    try:
+        uf, is_example = resolve_universe_file(cfg)
+    except Exception:
+        uf, is_example = None, False
+    primary_csv = bool(get(cfg, "market_data.providers")) and \
+        sorted(get(cfg, "market_data.providers"), key=lambda p: int(p.get("priority", 50)))[0].get("type") == "csv"
+    if n_active == 0:
+        put("UNIVERSE", "EMPTY", "0 emiten aktif")
+    elif is_example and not primary_csv:
+        put("UNIVERSE", "WARN", f"{n_active} emiten aktif — DAFTAR CONTOH ({uf.name}), bukan seluruh BEI: simpan "
+                                "Daftar Saham idx.co.id sebagai config/universe.xlsx")
+    else:
+        put("UNIVERSE", "OK", f"{n_active} emiten aktif" + (f" (sumber: {uf.name})" if uf and not primary_csv else ""))
 
     fr = data_freshness(cfg, repo, ctx.calendar, provider_latest)
     out["freshness"] = fr

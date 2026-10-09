@@ -28,7 +28,8 @@ class SwingModel:
         missing = [c for c in self.features if c not in df.columns]
         if missing:
             raise KeyError(f"Fitur hilang saat prediksi: {missing[:5]}...")
-        return df[self.features].astype(float)
+        # juga melindungi model yang sudah tersimpan dari nilai non-finite / ekstrem
+        return df[self.features].astype(float).replace([np.inf, -np.inf], np.nan).clip(-1e6, 1e6)
 
     def predict(self, df: pd.DataFrame) -> pd.DataFrame:
         X = self._X(df)

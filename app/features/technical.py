@@ -57,7 +57,11 @@ def compute_stock_features(g: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     out["atr14"] = ind.atr(h, l, c, 14)
     out["atr_pct"] = out["atr14"] / c
     out["f_atr_pct"] = out["atr_pct"]
-    out["f_mom10_atr"] = out["f_mom10_atr"] / out["atr14"]
+    # Pembagi ATR diberi batas bawah 0,01% harga: saat suspensi panjang (harga beku) ATR Wilder menyusut
+    # eksponensial ke ~1e-70, sehingga rasio terhadap ATR meledak (>1e38, melebihi float32) begitu saham aktif lagi.
+    atr_safe = np.maximum(out["atr14"], c * 1e-4)
+    atr_pct_safe = atr_safe / c
+    out["f_mom10_atr"] = out["f_mom10_atr"] / atr_safe
     ret1 = c.pct_change()
     out["vol20"] = ret1.rolling(20, min_periods=20).std()
     out["f_vol20"] = out["vol20"]
@@ -67,7 +71,7 @@ def compute_stock_features(g: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     out["bb_width_pct"] = ind.rolling_pct_rank(out["bb_width"], 120)
     out["f_bb_width_pct"] = out["bb_width_pct"]
     out["f_range_pct"] = (h - l) / c
-    out["f_atr_contraction"] = out["atr_pct"] / out["atr_pct"].rolling(60, min_periods=30).median()
+    out["f_atr_contraction"] = atr_pct_safe / atr_pct_safe.rolling(60, min_periods=30).median()
 
     # ---------- Volume
     out["vol_sma20"] = ind.sma(v, 20)

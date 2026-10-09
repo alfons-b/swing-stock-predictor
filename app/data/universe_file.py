@@ -44,6 +44,37 @@ class UniverseFileError(ValueError):
     pass
 
 
+EXAMPLE_FILE = "config/universe.example.csv"
+CANDIDATES = ["config/universe.xlsx", "config/universe.csv"]
+
+
+def resolve_universe_file(cfg: dict) -> tuple[Path | None, bool]:
+    """(path, is_example). Urutan: universe.file → config/universe.xlsx|csv → daftar CONTOH.
+
+    Daftar contoh hanya dipakai bila tidak ada file milik pengguna — dan selalu ditandai (health: WARN).
+    File milik pengguna TIDAK ikut dikirim dalam zip/update proyek, sehingga tidak pernah tertimpa.
+    """
+    from app.config import get, resolve_path
+    configured = get(cfg, "universe.file")
+    paths = ([configured] if configured else []) + [c for c in CANDIDATES if c != configured]
+    example = resolve_path(cfg, EXAMPLE_FILE)
+    for rel in paths:
+        p = resolve_path(cfg, rel)
+        if p.exists():
+            return p, is_example_list(p, example)
+    return (example, True) if example.exists() else (None, False)
+
+
+def is_example_list(path: Path, example: Path) -> bool:
+    """True bila isi file sama dengan daftar contoh (mis. contoh yang tersalin sebagai universe.csv)."""
+    if not example.exists() or path.resolve() == example.resolve():
+        return example.exists()
+    try:
+        return set(load_universe_file(path)["ticker"]) == set(load_universe_file(example)["ticker"])
+    except Exception:
+        return False
+
+
 def _norm(col) -> str:
     return re.sub(r"\s+", " ", str(col).strip().lower().replace("_", " ")).replace("listing date", "listing date")
 

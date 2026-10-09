@@ -34,6 +34,8 @@ def make_providers(cfg: dict) -> list[MarketDataProvider]:
             continue
         try:
             out.append(classes[e["type"]](e, cfg))
+        except ProviderUnavailable as ex:  # mis. cadangan CSV tanpa data di runner cloud — normal, tidak dipakai
+            log.info("Provider %s dilewati: %s", e.get("name"), ex)
         except Exception as ex:
             log.warning("Provider %s tidak bisa diinisialisasi: %s", e.get("name"), ex)
     return sorted(out, key=lambda p: p.priority)
@@ -98,12 +100,14 @@ class ProviderChain:
                         log.info("Provider %s tidak tersedia: %s", prov.name, e)
                         stats["errors"] += 1
                         for t in chunk:
-                            res.failed[t] = str(e)
+                            if not res.failed.get(t, "").endswith("tidak ada data baru"):
+                                res.failed[t] = str(e)
                         break
                     except Exception as e:
                         stats["errors"] += 1
                         for t in chunk:
-                            res.failed[t] = f"{prov.name}: {type(e).__name__}: {e}"[:300]
+                            if not res.failed.get(t, "").endswith("tidak ada data baru"):
+                                res.failed[t] = f"{prov.name}: {type(e).__name__}: {e}"[:300]
                         continue
                     for t in chunk:
                         f = frames.get(t)

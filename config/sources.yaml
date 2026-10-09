@@ -28,7 +28,9 @@ universe:
   # Daftar emiten. Boleh langsung file unduhan idx.co.id → Data Pasar → Daftar Saham (.xlsx atau .csv,
   # kolom: No | Kode | Nama Perusahaan | Tanggal Pencatatan | Saham | Papan Pencatatan) TANPA diubah.
   # Format internal (ticker,name,sector,...) juga diterima. Hanya kolom kode saham yang wajib.
-  file: config/universe.csv
+  # Bila file ini tidak ada, dicoba config/universe.xlsx lalu config/universe.csv; terakhir daftar CONTOH
+  # config/universe.example.csv (40 emiten, health check: UNIVERSE WARN). File Anda tidak ikut dalam zip update.
+  file: config/universe.xlsx
   # Opsional: file sektor terpisah (kolom Kode/ticker + Sektor/sector [+ Subsektor/subsector]).
   # Daftar Saham BEI tidak memuat sektor; tanpa file ini sektor diisi bertahap dari Yahoo (taksonomi Yahoo).
   sectors_file: null

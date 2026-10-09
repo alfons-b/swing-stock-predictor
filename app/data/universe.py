@@ -23,11 +23,14 @@ class UniverseManager:
 
     def _file_universe(self) -> tuple[pd.DataFrame, str] | None:
         """File daftar emiten (unduhan BEI .xlsx/.csv apa adanya, atau format internal)."""
-        from app.data.universe_file import apply_sectors, load_universe_file
-        p = resolve_path(self.cfg, get(self.cfg, "universe.file", "config/universe.csv"))
-        if not p.exists():
+        from app.data.universe_file import apply_sectors, load_universe_file, resolve_universe_file
+        p, is_example = resolve_universe_file(self.cfg)
+        if p is None:
             return None
         u = load_universe_file(p)
+        if is_example:
+            log.warning("Universe memakai DAFTAR CONTOH (%d emiten, %s) — bukan seluruh BEI. Unduh Daftar Saham dari "
+                        "idx.co.id, simpan sebagai config/universe.xlsx, commit & push.", len(u), p.name)
         if u.attrs.get("invalid_rows"):
             log.warning("Universe %s: %d baris kode tidak valid dilewati (mis. %s)", p.name,
                         len(u.attrs["invalid_rows"]), ", ".join(u.attrs["invalid_rows"][:5]))

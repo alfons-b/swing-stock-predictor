@@ -69,9 +69,8 @@ Ada tiga jenis data yang dibutuhkan, dan sumbernya berbeda-beda:
 **Daftar emiten — pakai file BEI apa adanya.**
 
 1. Buka idx.co.id → *Data Pasar → Data Saham → Daftar Saham*, lalu unduh (Excel).
-2. Simpan sebagai `config/universe.xlsx`. Tidak perlu mengubah kolom: `No | Kode | Nama Perusahaan | Tanggal Pencatatan | Saham | Papan Pencatatan` dikenali otomatis, termasuk tanggal berformat Indonesia ("31 Mei 2000"), angka bertitik ("123.275.050.000"), dan baris judul di atas tabel.
-3. Di `config/sources.yaml`, ubah `universe.file: config/universe.xlsx`.
-4. Commit file itu. Perbarui sebulan sekali (atau saat ada IPO baru yang ingin Anda ikuti), lalu commit lagi.
+2. Simpan sebagai `config/universe.xlsx` (nama ini sudah menjadi default; tidak perlu mengubah config). Tidak perlu mengubah kolom: `No | Kode | Nama Perusahaan | Tanggal Pencatatan | Saham | Papan Pencatatan` dikenali otomatis, termasuk tanggal berformat Indonesia ("31 Mei 2000"), angka bertitik ("123.275.050.000"), dan baris judul di atas tabel.
+3. Commit file itu. Perbarui sebulan sekali (atau saat ada IPO baru yang ingin Anda ikuti), lalu commit lagi.
 
 Pemetaan kolom:
 
@@ -83,6 +82,8 @@ Pemetaan kolom:
 | Saham | `listed_shares`, jumlah saham tercatat |
 | Papan Pencatatan | `board` |
 | No | diabaikan |
+
+Tanpa file itu, sistem memakai **daftar contoh 40 emiten** (`config/universe.example.csv`), dan health check menampilkan `UNIVERSE: WARN`. File daftar Anda tidak ikut dalam zip update proyek, jadi tidak akan tertimpa saat memperbarui kode.
 
 Format internal lama (`ticker,name,sector,...`) tetap diterima. Satu-satunya kolom wajib adalah kode saham.
 
@@ -264,7 +265,7 @@ Bila tidak memenuhi, status model menjadi **REJECTED** dan model lama tetap akti
 ## 4. Biaya & kapasitas
 
 - **Tanpa server 24/7.** Daily job berjalan beberapa menit lalu selesai. Dashboard di Streamlit Community Cloud bisa gratis.
-- **Storage Supabase (perkiraan kasar, verifikasi di dashboard Supabase).** `price_history` untuk ~900 emiten × 10 tahun ≈ 2,2 juta baris. Dengan index, ukurannya bisa mendekati batas paket gratis 500 MB. Untuk paket gratis, set `data.initial_history_years: 5`–`6`.
+- **Storage Supabase.** Diukur di PostgreSQL 16: `price_history` ≈ 200 byte per baris termasuk index. Untuk ~950 emiten: 6 tahun ≈ 275 MB (default), 10 tahun ≈ 455 MB. Batas paket gratis adalah 500 MB, dan tabel lain (prediksi harian, versi model yang disimpan di database) terus bertambah. Jadi di paket gratis jangan naikkan di atas 6 tahun, dan cek pemakaian di *Supabase → Project Settings → Usage* sebulan sekali.
 - **Histori minimum.** Walk-forward butuh ±3,2 tahun data untuk 1 fold validasi dan ±4,7 tahun untuk 4 fold (default). Jadi **jangan di bawah 5 tahun**. Bila kurang, `setup` langsung berhenti dalam hitungan detik dan menyebut angka yang dibutuhkan. Memperbesar `initial_history_years` belakangan aman: hanya tahun yang kurang yang diunduh (backfill).
 - **Tabel `features`** hanya menyimpan snapshot beberapa hari terakhir (`pipeline.features_snapshot_days`), karena fitur dihitung ulang dari harga.
 - **Daily** hanya memuat sekitar 2 tahun terakhir (`scan_lookback_trading_days`). **Retrain** memuat seluruh histori dan jadwalnya mingguan, tetapi hanya benar-benar melatih bila model aktif sudah lebih tua dari `retrain_frequency_days` (30 hari).
@@ -291,7 +292,7 @@ app/
   reporting/     CSV, HTML, Markdown harian
   notifications/ Telegram / webhook (opsional)
 dashboard/app.py    Streamlit (membaca database)
-config/             app.yaml · sources.yaml · model.yaml · trading.yaml · holidays.yaml · universe.csv
+config/             app.yaml · sources.yaml · model.yaml · trading.yaml · holidays.yaml · universe.example.csv
 tests/              test_database … test_daily_pipeline (lihat §57)
 Dockerfile · Dockerfile.dashboard · docker-compose.yml · render.yaml · .env.example
 ```
