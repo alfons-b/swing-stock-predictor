@@ -93,3 +93,20 @@ class TestSchemaConflict(unittest.TestCase):
                 db.executescript(["DROP TABLE pipeline_runs"])
                 migrate(db)  # setelah tabel asing dihapus, migrasi normal
                 db.close()
+
+
+class FailedStatementRecoveryTest(unittest.TestCase):
+    """Query gagal tidak boleh membuat koneksi berumur panjang (dashboard) macet di InFailedSqlTransaction."""
+
+    def test_connection_usable_after_error(self):
+        from app.database.db import Database
+        for url in db_urls():
+            with self.subTest(db=url.split(":")[0]):
+                db = Database.from_url(url)
+                with self.assertRaises(Exception):
+                    db.query("SELECT * FROM tabel_yang_tidak_ada")
+                self.assertEqual(db.scalar("SELECT 1"), 1)
+                with self.assertRaises(Exception):
+                    db.query_df("SELECT kolom_tidak_ada FROM tabel_yang_tidak_ada")
+                self.assertEqual(len(db.query_df("SELECT 1 AS x")), 1)
+                db.close()

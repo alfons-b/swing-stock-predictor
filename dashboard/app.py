@@ -64,12 +64,41 @@ def jl(v):
         return []
 
 
-try:
+def _connect_check():
     c = ctx()
-    c.db.scalar("SELECT 1")
+    try:
+        c.db.scalar("SELECT 1")
+    except Exception:
+        # koneksi lama rusak (transaksi aborted / ditutup pooler) → buang & sambung ulang sekali
+        try:
+            c.db.close()
+        except Exception:
+            pass
+        c.db.scalar("SELECT 1")
+    return c
+
+
+try:
+    c = _connect_check()
 except Exception as e:
-    st.error(f"Database tidak bisa diakses: {type(e).__name__}. Set DATABASE_URL di secrets.")
+    st.cache_resource.clear()
+    st.error(f"Database tidak bisa diakses: {type(e).__name__}. Periksa DATABASE_URL di secrets "
+             "(connection string Session pooler Supabase), lalu Reboot app.")
     st.stop()
+
+
+@st.cache_data(ttl=300)
+def research_ready() -> str | None:
+    """None bila tabel/kolom riset sudah ada; selain itu pesan. Skema dibuat/diperbarui oleh workflow Daily/Setup."""
+    for sql in ("SELECT 1 FROM valuation_results LIMIT 1", "SELECT 1 FROM accumulation_signals LIMIT 1",
+                "SELECT 1 FROM foreign_flow_history LIMIT 1", "SELECT value_score, accumulation_status FROM predictions LIMIT 1",
+                "SELECT category FROM data_sources LIMIT 1"):
+        try:
+            c.db.query(sql)
+        except Exception:
+            return ("Skema database belum memuat tabel riset (valuasi / foreign flow / akumulasi). Jalankan workflow "
+                    "**Daily Market Pipeline** sekali (Actions → Run workflow) — migrasi berjalan otomatis — lalu muat ulang.")
+    return None
 
 PAGES = ["Market Overview", "Top Swing Stocks", "Sector Strength", "Stock Detail", "Undervalued Screener", "Foreign Flow",
          "Accumulation / Distribution", "Integrated Research", "Prediction History", "Backtest", "Model Performance",
@@ -238,6 +267,9 @@ elif page == "Data Health":
 # ================================================================ halaman riset (logika data: app/research/dashboard_data.py)
 elif page == "Undervalued Screener":
     from app.research import dashboard_data as dd
+    if research_ready():
+        st.warning(research_ready())
+        st.stop()
     st.title("Undervalued screener")
     st.caption("Nilai wajar = RENTANG estimasi berbasis asumsi (config/research.yaml). Keputusan VALUE terpisah dari SWING. "
                "Bukan nasihat investasi.")
@@ -262,6 +294,9 @@ elif page == "Undervalued Screener":
 
 elif page == "Foreign Flow":
     from app.research import dashboard_data as dd
+    if research_ready():
+        st.warning(research_ready())
+        st.stop()
     st.title("Foreign flow")
     ov = dd.foreign_flow_overview(c.repo)
     if ov["status"] != "AVAILABLE":
@@ -288,6 +323,9 @@ elif page == "Foreign Flow":
 
 elif page == "Accumulation / Distribution":
     from app.research import dashboard_data as dd
+    if research_ready():
+        st.warning(research_ready())
+        st.stop()
     st.title("Akumulasi / distribusi")
     st.caption("Bukti perilaku harga-volume (OBV, ADL, CMF, MFI, RVOL, CLV, VWAP, divergensi) + foreign flow bila ada. "
                "Bukan bukti identitas pembeli. STRONG hanya bila foreign flow tersedia & searah.")
@@ -301,6 +339,9 @@ elif page == "Accumulation / Distribution":
 
 elif page == "Integrated Research":
     from app.research import dashboard_data as dd
+    if research_ready():
+        st.warning(research_ready())
+        st.stop()
     from app.research.integrated_scoring import RANKINGS
     st.title("Integrated research")
     st.caption("Skor terpisah 0–100; composite = rata-rata berbobot skor yang TERSEDIA (bobot dinormalisasi ulang). "

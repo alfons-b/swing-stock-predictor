@@ -89,29 +89,58 @@ class Database:
     def _sql(self, sql: str) -> str:
         return sql if self.placeholder == "?" else sql.replace("?", self.placeholder)
 
+    def _recover(self) -> None:
+        """Setelah statement gagal: PostgreSQL menandai transaksi 'aborted' dan MENOLAK semua query berikutnya
+        (InFailedSqlTransaction) sampai rollback. Koneksi yang mati (jaringan/pooler menutup) dibuang agar
+        panggilan berikutnya membuka koneksi baru — penting untuk koneksi berumur panjang (dashboard)."""
+        if self._conn is None:
+            return
+        try:
+            self._conn.rollback()
+        except Exception:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
+            return
+        if getattr(self._conn, "closed", False):
+            self._conn = None
+
+    def _run(self, fn):
+        try:
+            return fn(self.conn.cursor())
+        except Exception:
+            self._recover()
+            raise
+
     def execute(self, sql: str, params: tuple | list = ()) -> int:
-        cur = self.conn.cursor()
-        cur.execute(self._sql(sql), [_py(p) for p in params])
-        n = cur.rowcount
-        self.conn.commit()
-        return n
+        def f(cur):
+            cur.execute(self._sql(sql), [_py(p) for p in params])
+            n = cur.rowcount
+            self.conn.commit()
+            return n
+        return self._run(f)
 
     def executescript(self, statements: list[str]) -> None:
-        cur = self.conn.cursor()
-        for st in statements:
-            cur.execute(st)
-        self.conn.commit()
+        def f(cur):
+            for st in statements:
+                cur.execute(st)
+            self.conn.commit()
+        self._run(f)
 
     def query(self, sql: str, params: tuple | list = ()) -> list[tuple]:
-        cur = self.conn.cursor()
-        cur.execute(self._sql(sql), [_py(p) for p in params])
-        return cur.fetchall()
+        def f(cur):
+            cur.execute(self._sql(sql), [_py(p) for p in params])
+            return cur.fetchall()
+        return self._run(f)
 
     def query_df(self, sql: str, params: tuple | list = (), parse_dates: list[str] | None = None) -> pd.DataFrame:
-        cur = self.conn.cursor()
-        cur.execute(self._sql(sql), [_py(p) for p in params])
-        cols = [d[0] for d in cur.description]
-        df = pd.DataFrame(cur.fetchall(), columns=cols)
+        def f(cur):
+            cur.execute(self._sql(sql), [_py(p) for p in params])
+            return [d[0] for d in cur.description], cur.fetchall()
+        cols, rows = self._run(f)
+        df = pd.DataFrame(rows, columns=cols)
         for c in parse_dates or []:
             if c in df:
                 df[c] = pd.to_datetime(df[c])
