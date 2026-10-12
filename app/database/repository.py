@@ -258,10 +258,8 @@ class Repository:
 
     def write_logs(self, rows: list[dict]) -> None:
         if rows:
-            cur = self.db.conn.cursor()
-            sql = self.db._sql("INSERT INTO system_logs (run_id, ts, level, logger, message) VALUES (?, ?, ?, ?, ?)")
-            cur.executemany(sql, [(r["run_id"], r["ts"], r["level"], r["logger"], r["message"][:4000]) for r in rows])
-            self.db.conn.commit()
+            self.db.executemany("INSERT INTO system_logs (run_id, ts, level, logger, message) VALUES (?, ?, ?, ?, ?)",
+                                [(r["run_id"], r["ts"], r["level"], r["logger"], r["message"][:4000]) for r in rows])
 
     def set_source_availability(self, name: str, category: str, status: str, detail: str = "", priority: int = 50) -> None:
         """Status ketersediaan sumber riset (fundamental / foreign flow / broker) — tampil di Data Health."""

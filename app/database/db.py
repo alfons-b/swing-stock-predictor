@@ -59,6 +59,7 @@ class Database:
     def __init__(self, url: str):
         self.url = url
         self._conn = None
+        self._in_tx = False          # True di dalam `with db.transaction()` (atomik: tidak ada commit/retry otomatis)
 
     # ------------------------------------------------------------------ factory
     @staticmethod
@@ -107,12 +108,32 @@ class Database:
         if getattr(self._conn, "closed", False):
             self._conn = None
 
-    def _run(self, fn):
-        try:
-            return fn(self.conn.cursor())
-        except Exception:
-            self._recover()
-            raise
+    def _run(self, fn, read: bool = False):
+        """Jalankan satu operasi. Dua aturan untuk job panjang di PostgreSQL terkelola (Neon):
+
+        1. Baca di luar transaksi eksplisit → transaksi implisit langsung ditutup (commit). Tanpa ini sesi tertinggal
+           'idle in transaction' selama komputasi CPU berikutnya, dan server memutusnya
+           (IdleInTransactionSessionTimeout — insiden Initial Setup 12 Okt 2026).
+        2. Koneksi diputus server (timeout, compute Neon tidur/restart, jaringan) → buka koneksi baru dan ulangi SEKALI.
+           Aman karena di luar transaksi eksplisit setiap operasi berdiri sendiri: kegagalan sebelum commit berarti
+           tidak ada yang tersimpan, dan penulisan di proyek ini idempoten (UPSERT/UPDATE/DELETE berkunci).
+           Di dalam `transaction()` tidak ada retry: error dilempar agar atomisitas tidak dikorbankan.
+        """
+        attempts = 1 if self._in_tx else 2
+        for attempt in range(attempts):
+            try:
+                out = fn(self.conn.cursor())
+                if read and not self._in_tx:
+                    self.conn.commit()
+                return out
+            except Exception as e:
+                if self._in_tx:
+                    raise                               # transaction() yang melakukan rollback
+                self._recover()
+                if self._conn is not None or attempt + 1 >= attempts:
+                    raise                               # error SQL biasa, atau sudah dicoba ulang
+                log.warning("Koneksi database terputus (%s) — membuka koneksi baru dan mengulang sekali",
+                            type(e).__name__)
 
     def execute(self, sql: str, params: tuple | list = ()) -> int:
         def f(cur):
@@ -133,13 +154,13 @@ class Database:
         def f(cur):
             cur.execute(self._sql(sql), [_py(p) for p in params])
             return cur.fetchall()
-        return self._run(f)
+        return self._run(f, read=True)
 
     def query_df(self, sql: str, params: tuple | list = (), parse_dates: list[str] | None = None) -> pd.DataFrame:
         def f(cur):
             cur.execute(self._sql(sql), [_py(p) for p in params])
             return [d[0] for d in cur.description], cur.fetchall()
-        cols, rows = self._run(f)
+        cols, rows = self._run(f, read=True)
         df = pd.DataFrame(rows, columns=cols)
         for c in parse_dates or []:
             if c in df:
@@ -150,14 +171,31 @@ class Database:
         rows = self.query(sql, params)
         return rows[0][0] if rows else None
 
+    def executemany(self, sql: str, rows: list) -> None:
+        def f(cur):
+            cur.executemany(self._sql(sql), rows)
+            self.conn.commit()
+        self._run(f)
+
     @contextmanager
     def transaction(self):
+        """Blok atomik: commit di akhir, rollback bila ada error. Tanpa commit/retry otomatis di dalamnya."""
+        if self._in_tx:                                 # bersarang → ikut transaksi luar
+            yield self
+            return
+        self._in_tx = True
         try:
             yield self
             self.conn.commit()
         except Exception:
-            self.conn.rollback()
+            if self._conn is not None:                  # koneksi mati → transaksi sudah batal di server
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    self._recover()
             raise
+        finally:
+            self._in_tx = False
 
     # ------------------------------------------------------------------ upsert
     def upsert(self, table: str, df: pd.DataFrame | list[dict], keys: list[str], update: list[str] | None = None,
@@ -180,16 +218,18 @@ class Database:
             sql = f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({ph}) ON CONFLICT ({conflict}) DO UPDATE SET {set_clause}"
         else:
             sql = f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({ph}) ON CONFLICT ({conflict}) DO NOTHING"
-        existing = self._count_existing(table, df, keys) if count else 0
         rows = [tuple(_py(v) for v in r) for r in df.itertuples(index=False, name=None)]
-        cur = self.conn.cursor()
-        try:
+
+        def f(cur):
+            # Hitung + tulis + commit dalam satu unit: bila koneksi putus di tengah, tidak ada yang tersimpan dan
+            # _run mengulang seluruhnya di koneksi baru (ON CONFLICT → aman diulang).
+            existing = self._count_existing(table, df, keys) if count else 0
             for i in range(0, len(rows), batch_size):
                 cur.executemany(sql, rows[i:i + batch_size])
-            self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
+            if not self._in_tx:
+                self.conn.commit()
+            return existing
+        existing = self._run(f)
         return len(rows) - existing, existing if update else 0
 
     def _count_existing(self, table: str, df: pd.DataFrame, keys: list[str]) -> int:
