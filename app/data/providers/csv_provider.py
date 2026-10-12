@@ -96,6 +96,6 @@ class CSVProvider(MarketDataProvider):
         ix = self.get_index(None, None)
         return pd.Timestamp(ix["date"].max()) if len(ix) else None
 
-    def enrich_universe(self, tickers):
+    def enrich_universe(self, tickers, limit=None):
         u = self.get_universe()
         return u[u["ticker"].isin(tickers)][["ticker", "name", "sector", "subsector"]]

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from app.database.db import Database
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 TYPES = {
     "sqlite": {"ID": "INTEGER PRIMARY KEY AUTOINCREMENT", "TEXT": "TEXT", "INT": "INTEGER", "REAL": "REAL",
@@ -24,6 +24,7 @@ TABLES = [
     ("stocks", [("id", "ID", ""), ("ticker", "TEXT", "NOT NULL"), ("name", "TEXT", ""), ("sector", "TEXT", ""),
                 ("subsector", "TEXT", ""), ("board", "TEXT", ""), ("listing_date", "DATE", ""),
                 ("delisting_date", "DATE", ""), ("is_active", "BOOL", "NOT NULL"), ("previous_ticker", "TEXT", ""), ("listed_shares", "REAL", ""), ("fundamentals_checked_at", "TS", ""),
+                ("sector_checked_at", "TS", ""),
                 ("first_seen", "TS", ""), ("last_seen", "TS", ""), ("updated_at", "TS", "")],
      [["ticker"]], [["is_active"], ["sector"]]),
     ("price_history", [("id", "ID", ""), ("stock_id", "INT", "NOT NULL REFERENCES stocks(id)"), ("date", "DATE", "NOT NULL"),

@@ -45,6 +45,10 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - run: python main.py health --no-provider
+      - name: Lengkapi sektor emiten (Yahoo, seluruh sisa antrean)
+        run: |
+          set -o pipefail
+          python main.py sectors-update --limit 1000 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Perbarui laporan keuangan (incremental)
         run: |
           set -o pipefail
