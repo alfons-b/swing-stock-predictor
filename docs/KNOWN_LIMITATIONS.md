@@ -80,8 +80,8 @@ akurasi, profit, atau kesetaraan dengan hedge fund yang sudah dibuktikan. Semua 
 
 - Test dijalankan dengan `unittest` dan shim `pytest` minimal, karena akses ke pypi.org diblokir di sandbox
   pengembangan. CI GitHub (`tests.yml`) memakai pytest asli.
-- Jalur PostgreSQL **tidak** dijalankan di sandbox (driver `psycopg` tidak bisa dipasang). Jalur ini diuji oleh
-  job `pytest` di CI dengan service PostgreSQL 16 setelah push.
+- Jalur PostgreSQL tidak bisa dijalankan di sandbox (driver `psycopg` tidak bisa dipasang). Jalur ini **lulus**
+  di CI GitHub (job `pytest` dengan service PostgreSQL 16) untuk commit PR #1.
 - Koneksi ke Neon belum diverifikasi karena database belum dibuat. Klaim "berjalan di Neon" baru sah setelah
   Database Health Check hijau di GitHub Actions (CLOUD_OPERATIONS §7).
 - `docs/RESEARCH_MODULES.md` dan `docs/examples/` dirujuk README lama tetapi tidak ada di repo.
