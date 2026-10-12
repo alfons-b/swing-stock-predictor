@@ -97,6 +97,14 @@ class TestReadsCloseTransaction(unittest.TestCase):
         self.assertFalse(db.conn.in_tx)
 
 
+class TestSqlTranslation(unittest.TestCase):
+    def test_postgres_escapes_literal_percent(self):
+        db = Database.from_url("postgresql://u:p@localhost:5432/x")      # tidak konek (lazy)
+        self.assertEqual(db._sql("SELECT * FROM t WHERE a LIKE 'x-%' AND b = ?"),
+                         "SELECT * FROM t WHERE a LIKE 'x-%%' AND b = %s")
+        self.assertEqual(Database.from_url("sqlite:///:memory:")._sql("a LIKE 'x-%' AND b = ?"), "a LIKE 'x-%' AND b = ?")
+
+
 class TestReconnect(unittest.TestCase):
     def test_dropped_connection_is_reopened_once(self):
         db = _FakeDB()
@@ -148,6 +156,12 @@ class TestPostgresLongJob(unittest.TestCase):
         self.assertEqual(db.conn.info.transaction_status, psycopg.pq.TransactionStatus.IDLE)
         time.sleep(2.0)                                # meniru hitung fitur ±6 menit di CPU
         self.assertEqual(db.scalar("SELECT 2"), 2)
+
+    def test_literal_percent_in_sql(self):
+        db = self.db
+        self.assertEqual(db.scalar("SELECT COUNT(*) FROM (SELECT 'wf-test-1' AS r) t WHERE r LIKE 'wf-test-%'"), 1)
+        self.assertEqual(db.scalar("SELECT COUNT(*) FROM (SELECT 'wf-test-1' AS r) t WHERE r LIKE ?", ("wf-%",)), 1)
+        self.assertEqual(db.scalar("SELECT '100%'"), "100%")
 
     def test_recovers_when_server_terminates_session(self):
         db = self.db
