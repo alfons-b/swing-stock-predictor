@@ -52,4 +52,11 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - name: pytest (SQLite + PostgreSQL)
-        run: pytest -q --maxfail=5
+        # Nama test yang gagal juga ditulis sebagai anotasi (::error::) agar terlihat di ringkasan run/PR
+        # tanpa membuka log lengkap.
+        run: |
+          set -o pipefail
+          pytest -q --maxfail=5 -rfE 2>&1 | tee pytest.log || {
+            grep -E "^(FAILED|ERROR) " pytest.log | head -20 | sed 's/^/::error title=pytest::/'
+            exit 1
+          }
