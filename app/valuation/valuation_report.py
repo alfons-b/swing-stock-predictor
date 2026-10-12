@@ -225,7 +225,7 @@ VALUATION_COLS = ["stock_id", "as_of_date", "price", "sector_type", "fair_value_
 
 
 def compact_json(row_methods: str | None, row_metrics: str | None, row_trap: str | None) -> tuple:
-    """Versi ringkas untuk database (kuota Supabase): tanpa grid sensitivitas & teks alasan per metrik.
+    """Versi ringkas untuk database (kuota storage paket gratis): tanpa grid sensitivitas & teks alasan per metrik.
     Detail lengkap selalu bisa dihitung ulang point-in-time (`python main.py research TICKER --date ...`)."""
     m = json.loads(row_methods) if isinstance(row_methods, str) else {}
     for x in m.get("methods", []):

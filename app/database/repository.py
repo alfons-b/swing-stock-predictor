@@ -159,6 +159,24 @@ class Repository:
             self.db.execute("DELETE FROM features WHERE date < ?", (dates[keep_days - 1],))
         return res
 
+    # ================================================================ scan coverage
+    def save_coverage(self, cov: pd.DataFrame, run_id: str) -> tuple[int, int]:
+        """Status cakupan per emiten untuk satu tanggal scan. Idempoten: run ulang pada tanggal sama menimpa."""
+        if cov is None or cov.empty:
+            return 0, 0
+        ids = self.stock_ids()
+        d = cov.assign(stock_id=cov["ticker"].map(ids), run_id=run_id, created_at=now_utc())
+        d = d[d["stock_id"].notna()]
+        cols = ["scan_date", "stock_id", "ticker", "status", "reason", "last_data_date", "history_rows", "run_id", "created_at"]
+        return self.db.upsert("scan_coverage", d.reindex(columns=cols), keys=["scan_date", "stock_id"], count=False)
+
+    def coverage(self, scan_date: str | None = None) -> pd.DataFrame:
+        d = scan_date or self.db.scalar("SELECT MAX(scan_date) FROM scan_coverage")
+        if not d:
+            return pd.DataFrame()
+        return self.db.query_df("SELECT scan_date, ticker, status, reason, last_data_date, history_rows, run_id "
+                                "FROM scan_coverage WHERE scan_date = ? ORDER BY status, ticker", (d,))
+
     # ================================================================ predictions
     def save_predictions(self, df: pd.DataFrame) -> tuple[int, int]:
         return self.db.upsert("predictions", df, keys=["prediction_date", "stock_id", "model_version"])

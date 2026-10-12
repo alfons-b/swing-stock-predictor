@@ -19,6 +19,7 @@ from app.pipeline.freshness import data_freshness
 from app.pipeline.health import check_environment, health_check
 from app.pipeline.market_data import build_dataset
 from app.reporting.daily_report import html_report, markdown_report, predictions_csv, sector_table
+from app.scanner.coverage import build_coverage, coverage_csv, coverage_summary
 from app.scanner.scanner import analyze_ticker, scan_day, summarize_scan
 from app.utils.logging_utils import get_logger
 
@@ -51,7 +52,8 @@ def _ingest(ctx: AppContext, run: PipelineRun, full_actions: bool = False) -> di
         raise PipelineAbort(f"{st.stocks_failed}/{st.stocks_requested} ticker gagal diunduh — provider bermasalah")
     if st.stocks_failed:
         run.status = "PARTIAL_SUCCESS"
-    return {"universe": uni, "ingestion": st.as_dict()}
+    # daftar lengkap (as_dict memotong 50 untuk ringkasan) — dipakai status cakupan per emiten
+    return {"universe": uni, "ingestion": st.as_dict(), "_failed_all": dict(st.failed), "_no_data": list(st.no_data)}
 
 
 def _load_model(ctx: AppContext):
@@ -60,6 +62,28 @@ def _load_model(ctx: AppContext):
         raise PipelineAbort(f"Model {active['version']} memakai feature_version {active.get('feature_version')} "
                             f"≠ {FEATURE_VERSION}. Jalankan workflow retrain.")
     return model, active["version"]
+
+
+def _coverage(ctx: AppContext, df: pd.DataFrame, ingest: dict | None) -> pd.DataFrame:
+    """Status cakupan setiap emiten aktif pada tanggal scan (dihitung SEBELUM ranking agar gerbang BUY berlaku)."""
+    d = df["date"].max()
+    ingest = ingest or {}
+    return build_coverage(ctx.repo.stocks(), ctx.repo.latest_price_dates(), df[df["date"] == d], d, ctx.cfg,
+                          ingest.get("_failed_all"), ingest.get("_no_data"))
+
+
+def _record_coverage(ctx: AppContext, run: PipelineRun, cov: pd.DataFrame, summary: dict) -> dict:
+    cs = coverage_summary(cov)
+    summary["coverage"] = cs
+    ctx.repo.save_coverage(cov, run.run_id)
+    min_pct = float(get(ctx.cfg, "coverage.min_coverage_pct", 80))
+    log.info("Cakupan scan %s: %d/%d dianalisis (%.1f%%), %d layak sinyal, status %s", cs["scan_date"], cs["processed"],
+             cs["total_universe"], cs["coverage_pct"], cs["signal_eligible"], cs["status_counts"], extra={"persist": True})
+    if cs["total_universe"] and cs["coverage_pct"] < min_pct:
+        log.warning("Cakupan %.1f%% < minimum %.0f%% — run ditandai PARTIAL_SUCCESS", cs["coverage_pct"], min_pct,
+                    extra={"persist": True})
+        run.status = "PARTIAL_SUCCESS"
+    return cs
 
 
 def _driver_features(ctx, model) -> list[str]:
@@ -136,13 +160,15 @@ def _run_research(ctx: AppContext, df: pd.DataFrame, res: dict, run_id: str) -> 
 
 
 def _write_reports(ctx: AppContext, summary: dict, res: dict, df: pd.DataFrame, run_id: str, evaluation=None,
-                   research_table: pd.DataFrame | None = None) -> list[str]:
+                   research_table: pd.DataFrame | None = None, coverage: pd.DataFrame | None = None) -> list[str]:
     ds = summary["date"].replace("-", "")
     sec = sector_table(res["signals"])
     files = [("predictions_csv", f"daily_predictions_{ds}.csv", predictions_csv(res["signals"], ctx.cfg["labels"]["SWING_HORIZON"])),
              ("html", f"daily_report_{ds}.html", html_report(summary, sec, df, evaluation).encode("utf-8")),
              ("markdown", f"daily_report_{ds}.md", markdown_report(summary, sec).encode("utf-8")),
              ("summary_json", f"daily_summary_{ds}.json", json.dumps(summary, default=str, ensure_ascii=False, indent=2).encode())]
+    if coverage is not None and len(coverage):
+        files.append(("coverage_csv", f"scan_coverage_{ds}.csv", coverage_csv(coverage)))
     if research_table is not None and len(research_table):
         from app.research.report import research_csv
         files.append(("research_csv", f"research_rankings_{ds}.csv", research_csv(research_table)))
@@ -156,17 +182,22 @@ def _today(ctx: AppContext) -> pd.Timestamp:
 
 
 def ensure_writable(ctx: AppContext) -> None:
-    """Database Supabase READ-ONLY (kuota terlampaui) → coba pulihkan dengan retensi + VACUUM FULL, lalu periksa lagi."""
+    """Kuota storage hampir/sudah terlampaui → pulihkan dengan retensi + VACUUM FULL SEBELUM menulis.
+
+    Supabase menandai database READ-ONLY; Neon/Aiven tidak memberi tanda apa pun, penulisan langsung gagal
+    ("project size limit exceeded" / disk penuh). Karena itu pemicu kedua adalah rasio ukuran ≥ 95%."""
     from app.database.maintenance import run_maintenance, size_status
     sz = size_status(ctx.cfg, ctx.db)
-    if not sz["read_only"]:
+    if not sz["read_only"] and sz["ratio"] < 0.95:
         return
-    log.error("Database READ-ONLY (%.0f MB, batas %.0f MB) — menjalankan maintenance darurat", sz["bytes"] / 1e6,
-              sz["limit_bytes"] / 1e6)
+    log.error("Database %s (%.0f MB, batas %.0f MB, %s) — menjalankan maintenance darurat",
+              "READ-ONLY" if sz["read_only"] else "hampir penuh", sz["bytes"] / 1e6, sz["limit_bytes"] / 1e6,
+              sz.get("provider"))
     res = run_maintenance(ctx.cfg, ctx.db, _today(ctx), full=True)
     if res["after_mb"] * 1e6 >= 0.95 * sz["limit_bytes"]:
         raise PipelineAbort(f"Database masih {res['after_mb']:.0f} MB setelah maintenance (batas {sz['limit_bytes'] / 1e6:.0f} MB). "
-                            "Kurangi retention.price_history_years / predictions_nonsignal_days, atau upgrade paket Supabase.")
+                            "Kurangi retention.price_history_years / predictions_nonsignal_days, atau naikkan paket "
+                            "database lalu set Variable DB_SIZE_LIMIT_MB.")
 
 
 def job_db_maintenance(ctx: AppContext, dry_run: bool = False, full: bool = False) -> dict:
@@ -195,14 +226,17 @@ def job_daily(ctx: AppContext, skip_ingest: bool = False) -> dict:
         df = build_dataset(ctx.cfg, ctx.repo, int(get(ctx.cfg, "pipeline.scan_lookback_trading_days", 520)), labels=False)
         model, version = _load_model(ctx)
         run.stats["model_version"] = version
-        res = scan_day(ctx.cfg, df, model, fresh)
+        cov = _coverage(ctx, df, ingest)
+        res = scan_day(ctx.cfg, df, model, fresh, coverage=cov)
         research = _run_research(ctx, df, res, run.run_id)
         summary = summarize_scan(ctx.cfg, res, model, version, fresh, ctx.is_synthetic(), _driver_features(ctx, model))
         summary["research"] = research.get("summary", {})
+        _record_coverage(ctx, run, cov, summary)
         saved = _save_scan(ctx, res, summary, run.run_id, version)
         evaluation = evaluate_predictions(ctx.cfg, ctx.repo)
-        uris = _write_reports(ctx, summary, res, df, run.run_id, evaluation, research.get("table"))
+        uris = _write_reports(ctx, summary, res, df, run.run_id, evaluation, research.get("table"), cov)
         run.stats["summary"] = {"headline": summary["headline"], "date": summary["date"], "regime": summary["market_regime"],
+                                "coverage": {k: v for k, v in summary["coverage"].items() if k != "top_reasons"},
                                 "top": [r["ticker"] for r in summary["recommendations"]], "freshness": fresh, "saved": saved,
                                 "evaluation": evaluation, "reports": uris, "ingestion": ingest.get("ingestion", {}).get("provider_stats")}
         try:
@@ -210,7 +244,7 @@ def job_daily(ctx: AppContext, skip_ingest: bool = False) -> dict:
             notify_daily(summary)
         except Exception as e:
             log.warning("Notifikasi gagal: %s", e)
-        try:  # cegah kuota database terlampaui (Supabase gratis → read-only di 500 MB)
+        try:  # cegah kuota database terlampaui (paket gratis: penulisan diblokir di atas batas)
             from app.database.maintenance import run_maintenance, size_status
             sz = size_status(ctx.cfg, ctx.db)
             if sz["maintenance_due"]:
@@ -292,9 +326,13 @@ def job_scan(ctx: AppContext, date: str | None = None, save: bool = True) -> dic
         model, version = _load_model(ctx)
         if date:  # scan historis: freshness tidak relevan, tetapi ditandai
             fresh = {**fresh, "status": "HISTORICAL", "trading_allowed": True, "latest_database_date": date}
-        res = scan_day(ctx.cfg, df, model, fresh)
+        cov = None if date else _coverage(ctx, df, None)   # status historis tidak bisa direkonstruksi jujur
+        res = scan_day(ctx.cfg, df, model, fresh, coverage=cov)
         summary = summarize_scan(ctx.cfg, res, model, version, fresh, ctx.is_synthetic(), _driver_features(ctx, model))
+        if cov is not None:
+            summary["coverage"] = coverage_summary(cov)
         if save and not date:
+            _record_coverage(ctx, run, cov, summary)
             _save_scan(ctx, res, summary, run.run_id, version)
         run.stats.update({"model_version": version, "data_status": fresh["status"],
                           "summary": {"headline": summary["headline"], "date": summary["date"]}})
@@ -305,9 +343,14 @@ def job_predict(ctx: AppContext, ticker: str, date: str | None = None) -> dict:
     fresh = data_freshness(ctx.cfg, ctx.repo, ctx.calendar)
     df = build_dataset(ctx.cfg, ctx.repo, int(get(ctx.cfg, "pipeline.scan_lookback_trading_days", 520)), labels=False, end=date)
     model, version = _load_model(ctx)
-    res = scan_day(ctx.cfg, df, model, fresh)
+    cov = None if date else _coverage(ctx, df, None)
+    res = scan_day(ctx.cfg, df, model, fresh, coverage=cov)
     rec = analyze_ticker(ctx.cfg, res, ticker, model, version, ctx.is_synthetic())
     rec["data_freshness"] = fresh["status"]
+    if cov is not None:
+        row = cov[cov["ticker"] == rec["ticker"]]
+        rec["coverage_status"] = row["status"].iloc[0] if len(row) else "NOT_IN_UNIVERSE"
+        rec["coverage_reason"] = row["reason"].iloc[0] if len(row) else ""
     return rec
 
 

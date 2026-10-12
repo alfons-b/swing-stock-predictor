@@ -1,7 +1,7 @@
 """Pemuatan konfigurasi: config/app.yaml + sources.yaml + model.yaml + trading.yaml (+ research.yaml) digabung jadi satu dict.
 
 - `${VAR:-default}` disubstitusi dari environment SEBELUM parsing YAML (tipe angka/bool tetap benar).
-- Secrets (DATABASE_URL, SUPABASE_KEY, ...) hanya dari environment / GitHub Secrets, tidak pernah dari file.
+- Secrets (DATABASE_URL, API key provider, ...) hanya dari environment / GitHub Secrets, tidak pernah dari file.
 - Override CLI: `--set strategy.MIN_RISK_REWARD=2.0`.
 """
 from __future__ import annotations

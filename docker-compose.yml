@@ -1,4 +1,4 @@
-# Development lokal: PostgreSQL lokal + job + dashboard. Production TIDAK memakai compose (cloud jobs + Supabase).
+# Development lokal: PostgreSQL lokal + job + dashboard. Production TIDAK memakai compose (GitHub Actions + Neon PostgreSQL).
 services:
   db:
     image: postgres:16

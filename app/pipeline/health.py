@@ -51,6 +51,7 @@ def health_check(ctx, check_provider: bool = True) -> dict:
     try:
         ctx.db.scalar("SELECT 1")
         put("DATABASE", "OK", ctx.db.describe())
+        _provider_check(cfg, ctx.db, put)
         from app.database.maintenance import size_status
         sz = size_status(cfg, ctx.db)
         out["database_size"] = sz
@@ -136,6 +137,47 @@ def health_check(ctx, check_provider: bool = True) -> dict:
     critical = ["ENVIRONMENT", "DATABASE"]
     out["ok"] = all(out["checks"][c]["status"] == "OK" for c in critical if c in out["checks"])
     return out
+
+
+STRICT_CHECKS = ["ENVIRONMENT", "DATABASE", "DATABASE PROVIDER", "DATABASE SIZE", "DATABASE WRITE"]
+
+
+def write_probe(db) -> tuple[str, str]:
+    """Tulis lalu hapus satu baris log. Mendeteksi penyimpanan yang diblokir (kuota Neon/Aiven habis, Supabase
+    read-only, role tanpa izin tulis) — hal yang tidak terlihat dari SELECT 1."""
+    marker = "health-write-probe"
+    try:
+        db.execute("INSERT INTO system_logs (run_id, ts, level, logger, message) VALUES (?, ?, ?, ?, ?)",
+                   (marker, pd.Timestamp.now(tz="UTC").isoformat(timespec="seconds"), "INFO", "health", marker))
+        db.execute("DELETE FROM system_logs WHERE run_id = ?", (marker,))
+        return "OK", "insert + delete berhasil"
+    except Exception as e:
+        return "FAIL", f"penulisan gagal: {type(e).__name__}: {str(e)[:160]}"
+
+
+
+def strict_failures(h: dict) -> list[str]:
+    """Pemeriksaan untuk workflow Database Health Check: gagal juga saat penyimpanan hampir/sudah diblokir."""
+    return [k for k in STRICT_CHECKS if h["checks"].get(k, {}).get("status") == "FAIL"]
+
+
+def _provider_check(cfg, db, put) -> None:
+    """Provider database production. Informasi, bukan kegagalan: pipeline tetap jalan di provider mana pun,
+    tetapi keputusan proyek (docs/DATABASE_DECISION.md) adalah database terpisah di Neon, bukan Supabase."""
+    if db.dialect != "postgres":
+        if is_production(cfg):
+            put("DATABASE PROVIDER", "FAIL", "production wajib PostgreSQL eksternal")
+        return
+    prof = db.profile
+    if prof.name == "supabase":
+        put("DATABASE PROVIDER", "WARN", "Supabase terdeteksi — proyek ini harus memakai database terpisah (Neon). "
+                                         "Lihat docs/CLOUD_OPERATIONS.md §Migrasi")
+    elif prof.name in ("neon", "aiven"):
+        put("DATABASE PROVIDER", "OK", f"{prof.name} (paket gratis: batas efektif {prof.free_size_limit_mb:.0f} MB; "
+                                       f"bila terlampaui: {prof.on_limit})")
+    else:
+        put("DATABASE PROVIDER", "INFO", f"{prof.name} — batas ukuran dari DB_SIZE_LIMIT_MB / default "
+                                         f"{prof.free_size_limit_mb:.0f} MB")
 
 
 def _research_checks(cfg, db, put) -> None:

@@ -7,6 +7,6 @@ services:
     plan: free
     envVars:
       - key: DATABASE_URL
-        sync: false            # isi di dashboard Render (gunakan user read-only Supabase bila memungkinkan)
+        sync: false            # isi di dashboard Render (gunakan role read-only di database Neon)
       - key: APP_ENV
         value: production

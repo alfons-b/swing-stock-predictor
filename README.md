@@ -2,10 +2,10 @@
 
 **Analytical decision support system** untuk swing trading saham Bursa Efek Indonesia. Sistem ini bukan sistem profit terjamin, dan tidak pernah berkata "pasti naik". Yang diberikannya adalah probabilitas, level entry/SL/TP, risk/reward, dan ukuran posisi. Sistem juga berani menjawab **NO TRADE**.
 
-Seluruh pipeline berjalan di **GitHub Actions** dan menyimpan data ke **Supabase PostgreSQL**. **Laptop Anda tidak perlu hidup.** Laptop hanya dipakai untuk development, menjalankan test, dan membuka dashboard.
+Seluruh pipeline berjalan di **GitHub Actions** dan menyimpan data ke **Neon PostgreSQL**, sebuah database terpisah (bukan project Supabase yang dipakai aplikasi lain). **Laptop Anda tidak perlu hidup.** Laptop hanya dipakai untuk development, menjalankan test, dan membuka dashboard.
 
 ```
-GitHub Actions (cron / Run workflow) ─► python main.py daily ─► Supabase PostgreSQL ◄─ Dashboard (web service terpisah)
+GitHub Actions (cron / Run workflow) ─► python main.py daily ─► Neon PostgreSQL ◄─ Dashboard (web service terpisah)
         │                                   │
         │                                   ├─ data provider (Yahoo / IDX feed / CSV) + retry + fallback
         │                                   ├─ fitur → regime → sektor → setup → ML → risk → ranking
@@ -30,15 +30,18 @@ git push -u origin main
 
 Repository **privat** mendapat kuota menit GitHub Actions bulanan yang terbatas; repository publik gratis tanpa batas menit. Cek kuota akun Anda di *Settings → Billing*.
 
-### 1.2 Buat project Supabase
+### 1.2 Buat database Neon
 
-1. Buka supabase.com, lalu buat **New project**. Simpan password database-nya.
-2. Ambil connection string di **Connect → Connection string**. Pilih **Session pooler** (port 5432), bentuknya seperti ini:
+Langkah lengkapnya ada di [`docs/CLOUD_OPERATIONS.md` §1](docs/CLOUD_OPERATIONS.md#1-membuat-database-neon), dan alasan memilih Neon ada di [`docs/DATABASE_DECISION.md`](docs/DATABASE_DECISION.md). Ringkasnya:
+
+1. Buat **project Neon baru** khusus proyek ini (paket Free, tanpa kartu).
+2. Salin connection string *direct* (host **tanpa** `-pooler`):
    ```
-   postgresql://postgres.<project-ref>:<PASSWORD>@aws-0-<region>.pooler.supabase.com:5432/postgres
+   postgresql://<role>:<password>@ep-<nama>-<id>.<region>.aws.neon.tech/<database>?sslmode=require
    ```
-   Pakai **pooler**, bukan *direct connection*. Runner GitHub Actions hanya mendukung IPv4, sedangkan direct connection Supabase umumnya IPv6.
-3. Skema tabel dibuat otomatis oleh `setup`/`daily` (migrasi idempoten). Bila ingin membuatnya manual, jalankan isi `sql/schema_postgres.sql` di **SQL Editor**.
+3. Skema tabel dibuat otomatis oleh `setup`/`daily` (migrasi idempoten). Bila ingin membuatnya manual, jalankan isi `sql/schema_postgres.sql` di SQL Editor Neon.
+
+Pindah dari database Supabase lama: lihat [`docs/CLOUD_OPERATIONS.md` §7](docs/CLOUD_OPERATIONS.md#7-migrasi-dari-database-lama-supabase-ke-neon).
 
 ### 1.3 Isi GitHub Secrets
 
@@ -46,9 +49,7 @@ Buka **Settings → Secrets and variables → Actions → New repository secret*
 
 | Secret | Wajib | Isi |
 |---|---|---|
-| `DATABASE_URL` | **Ya** | Connection string Session pooler dari langkah 1.2 |
-| `SUPABASE_URL` | Tidak | Hanya bila `MODEL_STORAGE`/`REPORT_STORAGE` = `supabase` |
-| `SUPABASE_KEY` | Tidak | *Service role key*, untuk Supabase Storage. Jangan pernah dipakai di dashboard publik |
+| `DATABASE_URL` | **Ya** | Connection string Neon (direct) dari langkah 1.2 |
 | `MARKET_DATA_API_KEY` | Tidak | Hanya bila Anda punya feed data berlisensi (IDX) |
 | `FUNDAMENTAL_API_KEY` | Tidak | Feed laporan keuangan berlisensi (point-in-time). Tanpa ini: CSV manual + snapshot Yahoo |
 | `FOREIGN_FLOW_API_URL`, `FOREIGN_FLOW_API_KEY` | Tidak | API foreign flow vendor. Tanpa ini: file Ringkasan Saham BEI di `data/raw/foreign_flow` |
@@ -124,11 +125,13 @@ Bila model pertama tidak lolos gerbang kualitas, model itu tetap diaktifkan seba
 
 ### 1.7 Verifikasi database
 
-Jalankan `python main.py health` dari laptop dengan `DATABASE_URL` production. Cara lainnya, lihat tabel `pipeline_runs`, `price_history`, dan `model_versions` di Supabase Table Editor.
+Jalankan `python main.py health` dari laptop dengan `DATABASE_URL` production. Cara lainnya, jalankan workflow **Database Health Check** (uji koneksi, provider, ukuran, dan uji tulis), atau lihat tabel `pipeline_runs`, `price_history`, `scan_coverage`, dan `model_versions` di SQL Editor Neon.
 
 ### 1.8 Aktifkan daily workflow
 
-`daily.yml` sudah terjadwal **Senin–Jumat 18:30 WIB** (`cron: "30 11 * * 1-5"`, karena cron GitHub selalu memakai UTC). Pastikan workflow tidak dalam keadaan *disabled* di tab Actions. GitHub juga bisa menonaktifkan schedule pada repo yang tidak aktif selama 60 hari.
+`daily.yml` sudah terjadwal **Senin–Jumat 18:30 WIB** (`cron: "30 11 * * 1-5"`; cron ditulis dalam UTC). Pastikan workflow tidak dalam keadaan *disabled* di tab Actions. GitHub menonaktifkan schedule di repo publik yang tidak ada aktivitasnya selama 60 hari.
+
+**Jadwal GitHub tidak presisi.** Di repo ini, run terjadwal teramati mulai 2,5–6,5 jam setelah jadwal, jadi hasil "18:30" biasanya baru tersedia sekitar 00:30–01:00 WIB. Rinciannya ada di [`docs/CLOUD_OPERATIONS.md` §3](docs/CLOUD_OPERATIONS.md#3-workflow).
 
 Untuk menjalankannya **kapan saja secara manual**: **Actions → Daily Market Pipeline → Run workflow**. Hal yang sama berlaku untuk *Weekly Backtest* dan *Model Retrain*.
 
@@ -141,12 +144,12 @@ Daily job **tidak** menjalankan dashboard. Ada dua pilihan hosting:
   2. Di *Advanced settings → Python requirements*, pakai `requirements-dashboard.txt`.
   3. Di *Secrets*, isi:
      ```toml
-     DATABASE_URL = "postgresql://...pooler.supabase.com:5432/postgres"
+     DATABASE_URL = "postgresql://dashboard_ro:...@ep-...-pooler.<region>.aws.neon.tech/<database>?sslmode=require"
      ```
-  4. Sebaiknya buat user Postgres khusus yang **read-only** untuk dashboard.
+  4. Sebaiknya pakai role **read-only** `dashboard_ro` (SQL-nya ada di CLOUD_OPERATIONS §1).
 - **Render / Railway / Fly.io / Cloud Run.** Pakai `Dockerfile.dashboard` (Render: `render.yaml`) dan set environment variable `DATABASE_URL`.
 
-Halaman dashboard: Market Overview, Top Swing Stocks, Sector Strength, Stock Detail, Prediction History, Backtest, Model Performance, Pipeline Status, Data Health.
+Halaman dashboard: Market Overview, **Full-Market Coverage**, Top Swing Stocks, Sector Strength, Stock Detail, Prediction History, Backtest, Model Performance, Pipeline Status, Data Health.
 
 ---
 
@@ -207,7 +210,7 @@ Variabel di `.env` **tidak** dibaca otomatis. Set lewat shell, atau jalankan `do
 | `python main.py research BBCA [--date]` | **STOCK RESEARCH REPORT**: valuasi, foreign flow, akumulasi, skor & ranking (point-in-time) |
 | `python main.py rankings --ranking best_value` | Salah satu dari 9 ranking riset terintegrasi |
 | `python main.py valuation` / `fundamentals-update` / `fundamentals-template` / `foreign-flow-update` | Modul riset terpisah |
-| `python main.py evaluate-modules` | Evaluasi historis 9 varian + IC faktor (lihat `docs/RESEARCH_MODULES.md`) |
+| `python main.py evaluate-modules` | Evaluasi historis 9 varian + IC faktor (metode: `docs/ARCHITECTURE.md`) |
 | `--as-of YYYY-MM-DD` | Simulasi tanggal (untuk test dan backfill) |
 
 Kode keluar (exit code):
@@ -272,7 +275,7 @@ Bila tidak memenuhi, status model menjadi **REJECTED** dan model lama tetap akti
 ## 4. Biaya & kapasitas
 
 - **Tanpa server 24/7.** Daily job berjalan beberapa menit lalu selesai. Dashboard di Streamlit Community Cloud bisa gratis.
-- **Storage Supabase.** Di paket gratis, database yang melewati **500 MB** membuat project **read-only**: semua penulisan gagal, dan daily pipeline gagal setiap hari ([dokumentasi Supabase](https://supabase.com/docs/guides/platform/database-size)). Pertumbuhan yang diukur di PostgreSQL 16 untuk ~920 emiten:
+- **Storage database.** Neon Free memberi 1 GB per project. Batas efektif yang dipakai sistem adalah 950 MB, dideteksi otomatis dari host (`app/database/providers.py`). Di atas kuota, **penulisan diblokir** dan daily pipeline gagal. Rincian kuota dan estimasi ada di [`docs/DATABASE_DECISION.md`](docs/DATABASE_DECISION.md). Pertumbuhan yang diukur di PostgreSQL 16 untuk ~920 emiten:
 
   | Tabel | Ukuran | Pertumbuhan |
   |---|---|---|
@@ -293,7 +296,7 @@ Bila tidak memenuhi, status model menjadi **REJECTED** dan model lama tetap akti
   - **Workflow Database Maintenance** berjalan tiap tanggal 1, dan bisa juga manual dengan opsi *dry_run* / *full*.
   - **Health check** menampilkan `DATABASE SIZE` (WARN ≥ 80%, FAIL ≥ 95%).
 
-  Kalau database sempat read-only, daily mencoba memulihkan sendiri (retensi + `VACUUM FULL`). Kalau masih terlalu besar, daily berhenti dengan pesan jelas. Setelah upgrade ke paket Pro, set Variable `DB_SIZE_LIMIT_MB=8000`.
+  Kalau database read-only atau ukurannya ≥ 95% batas, daily mencoba memulihkan sendiri **sebelum menulis** (retensi + `VACUUM FULL`). Kalau masih terlalu besar, daily berhenti dengan pesan jelas. Setelah upgrade paket, set Variable `DB_SIZE_LIMIT_MB` ke batas barunya (MB).
 - **Histori minimum.** Walk-forward butuh ±3,2 tahun data untuk 1 fold validasi dan ±4,7 tahun untuk 4 fold (default). Jadi **jangan di bawah 5 tahun**. Bila kurang, `setup` langsung berhenti dalam hitungan detik dan menyebut angka yang dibutuhkan. Memperbesar `initial_history_years` belakangan aman: hanya tahun yang kurang yang diunduh (backfill).
 - **Tabel `features`** hanya menyimpan snapshot beberapa hari terakhir (`pipeline.features_snapshot_days`), karena fitur dihitung ulang dari harga.
 - **Daily** hanya memuat sekitar 2 tahun terakhir (`scan_lookback_trading_days`). **Retrain** memuat seluruh histori dan jadwalnya mingguan, tetapi hanya benar-benar melatih bila model aktif sudah lebih tua dari `retrain_frequency_days` (30 hari).
@@ -304,28 +307,28 @@ Bila tidak memenuhi, status model menjadi **REJECTED** dan model lama tetap akti
 ## 5. Struktur proyek
 
 ```
-.github/workflows/  daily.yml · model_retrain.yml · weekly_backtest.yml · tests.yml · setup.yml · db_maintenance.yml
+.github/workflows/  daily.yml · database_health_check.yml · fundamental_refresh.yml · model_retrain.yml · weekly_backtest.yml · tests.yml · setup.yml · db_maintenance.yml
 app/
   data/          providers (Yahoo, IDX, CSV, ProviderChain), universe manager, ingestion, validator, cleaner
-  database/      db.py (SQLite/PostgreSQL, UPSERT), schema.py (21 tabel, migrasi aditif), repository.py
+  database/      db.py (SQLite/PostgreSQL, UPSERT), providers.py (Neon/Aiven/…), schema.py (22 tabel, migrasi aditif), repository.py
   features/      indikator & fitur teknikal (bebas look-ahead), fundamental/berita point-in-time
   market/        TradingCalendar (Asia/Jakarta), market regime, sector strength & relative strength
   models/        label, model factory, kalibrasi, ensemble, trainer, retrain + kebijakan promosi
   strategy/      setup detector, entry, stop loss, take profit, scoring, filter NO-TRADE, explain
   risk/          position sizing (lot BEI, batas risiko & likuiditas)
-  scanner/       ranking & daily scanner, analisis per saham
+  scanner/       ranking & daily scanner, analisis per saham, cakupan per emiten (coverage.py)
   backtest/      engine (eksekusi konservatif), metrik, walk-forward, runner
   pipeline/      context (run tracking), jobs (daily/setup/...), health, freshness, evaluate
   valuation/     laporan keuangan PIT, rasio, nilai wajar (rentang), margin of safety, value trap, skor
   flows/         foreign flow (lembar ≠ nilai), fitur 5/20/60H, skor & status
   accumulation/  OBV/ADL/CMF/MFI/RVOL/CLV/VWAP, skor akumulasi, distribusi, tahap, antarmuka broker summary
   research/      skor terpisah + 9 ranking, orkestrasi daily, STOCK RESEARCH REPORT, evaluasi, data dashboard
-  storage/       ModelStorage & ReportStorage (local / database / Supabase Storage)
+  storage/       ModelStorage & ReportStorage (local / database; Supabase Storage = legacy, tidak dipakai)
   reporting/     CSV, HTML, Markdown harian
   notifications/ Telegram / webhook (opsional)
 dashboard/app.py    Streamlit (membaca database)
 config/             app.yaml · sources.yaml · model.yaml · trading.yaml · research.yaml · holidays.yaml · universe.example.csv
-docs/RESEARCH_MODULES.md   audit, metode valuasi/flow/akumulasi, point-in-time, self-audit P0–P3, cara verifikasi
+docs/               IMPLEMENTATION_ROADMAP · ARCHITECTURE · DATA_SOURCES · CLOUD_OPERATIONS · DATABASE_DECISION · KNOWN_LIMITATIONS
 tests/              test_database … test_daily_pipeline (lihat §57)
 Dockerfile · Dockerfile.dashboard · docker-compose.yml · render.yaml · .env.example
 ```
@@ -347,14 +350,14 @@ Hasil ini dijalankan dengan SQLite dan `make-sample` (45 ticker fiktif, 2017–2
 
   Di kedua periode, lapisan ML **tidak** mengalahkan aturan teknikal saja. Lakukan perbandingan yang sama pada data BEI asli sebelum memercayai komponen ML.
 
-- **Daily 2 Okt 2026:** regime STRONG_BEAR, sehingga hasilnya **NO HIGH-CONVICTION SETUP TODAY** dengan 5 saham di watchlist. Contoh report ada di `docs/examples/`.
+- **Daily 2 Okt 2026:** regime STRONG_BEAR, sehingga hasilnya **NO HIGH-CONVICTION SETUP TODAY** dengan 5 saham di watchlist. Contoh report dibuat oleh `make-sample` + `daily` (folder `docs/examples/` yang dulu dirujuk tidak ada di repo).
 
 ---
 
 ## 7. Keterbatasan yang diketahui (dinyatakan terus terang)
 
 - **Modul riset** (valuasi, foreign flow, akumulasi): detail, sumber data, dan self-audit ada di
-  [`docs/RESEARCH_MODULES.md`](docs/RESEARCH_MODULES.md). Tanpa feed fundamental berlisensi, valuasi memakai snapshot
+  [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md) dan [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md). Tanpa feed fundamental berlisensi, valuasi memakai snapshot
   Yahoo yang baru berlaku sejak tanggal diambil; tanpa file Ringkasan Saham/API vendor, foreign flow berstatus
   `FOREIGN_FLOW_UNAVAILABLE` dan tidak ikut dalam skor (bukan dianggap nol).
 
