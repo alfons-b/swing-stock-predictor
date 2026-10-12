@@ -223,7 +223,9 @@ tidak dihapus oleh kode mana pun; membersihkannya adalah keputusan Anda.
 Dashboard tidak berjalan di GitHub Actions. Dashboard adalah web service terpisah yang hanya membaca database.
 
 - **Streamlit Community Cloud** (gratis): main file `dashboard/app.py`, requirements `requirements-dashboard.txt`,
-  Secrets `DATABASE_URL = "<connection string role dashboard_ro>"`.
+  Secrets `DATABASE_URL = "<connection string role dashboard_ro>"`. Secret dashboard **terpisah** dari GitHub Secrets:
+  mengganti `DATABASE_URL` di GitHub tidak mengubah dashboard. Dashboard berhenti dengan pesan jelas bila masih
+  tersambung ke Supabase, dan sidebar selalu menampilkan provider database serta tanggal data terakhir.
 - Alternatif: Render web service (`render.yaml`, `Dockerfile.dashboard`). Render **web service** gratis berbeda dari
   Render PostgreSQL gratis yang kedaluwarsa; yang ditolak di DATABASE_DECISION.md adalah databasenya.
 

@@ -255,6 +255,14 @@ def cmd_rankings(cfg, a):
     return 0
 
 
+def cmd_sectors_update(cfg, a):
+    from app.data.universe import UniverseManager
+    ctx = _ctx(cfg)
+    out = UniverseManager(cfg, ctx.repo, ctx.chain)._enrich_metadata(limit=a.limit)
+    print(f"Sektor: {out['attempted']} emiten dicek, {out['filled']} terisi, {out['missing']} masih tanpa sektor")
+    return 0
+
+
 def cmd_fundamentals_update(cfg, a):
     from app.valuation.fundamental_provider import update_fundamentals
     ctx = _ctx(cfg)
@@ -337,6 +345,8 @@ def build_parser():
     s = sub.add_parser("rankings", help="ranking riset terintegrasi"); s.add_argument("--date"); s.add_argument("--top", type=int, default=20)
     s.add_argument("--ranking", default="integrated", choices=["best_value", "quality_value", "accumulation", "foreign_buying",
                    "swing_setup", "value_accumulation", "value_swing", "momentum_flow", "integrated"]); s.set_defaults(fn=cmd_rankings)
+    s = sub.add_parser("sectors-update", help="isi sektor emiten yang kosong (Yahoo), antrean berputar")
+    s.add_argument("--limit", type=int, default=1000); s.set_defaults(fn=cmd_sectors_update)
     s = sub.add_parser("fundamentals-update"); s.add_argument("--tickers", help="BBCA,TLKM (default: incremental)"); s.add_argument("--date")
     s.set_defaults(fn=cmd_fundamentals_update)
     s = sub.add_parser("fundamentals-template"); s.add_argument("--out", default="data/raw/fundamentals/template.csv")

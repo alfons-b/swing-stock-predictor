@@ -68,6 +68,16 @@ akurasi, profit, atau kesetaraan dengan hedge fund yang sudah dibuktikan. Semua 
 - Skor `scalping_score`, `risk_score`, dan `data_quality_score` dari spesifikasi belum ada sebagai kolom
   tersendiri. Kualitas data kini tercermin di status cakupan per emiten.
 
+### Temuan backtest dari database lama (dilihat di dashboard, 13 Okt 2026)
+
+Run `wf-test` out-of-sample 10 Apr–9 Okt 2026, setelah biaya: strategi (ML) **−5,2%** (44 trade, Sharpe −1,01),
+teknikal-saja **−10,8%**, IHSG **−18,3%**. ML mengurangi kerugian dibanding pembanding, tetapi strategi masih **rugi
+secara absolut**, dan di periode validasi varian teknikal juga negatif (−16,5%). IC momentum 20 hari terhadap return
+5 hari negatif (t ≈ −4,1), mengisyaratkan pembalikan jangka pendek di BEI yang bertentangan dengan setup momentum.
+Setup BREAKOUT dan TREND_CONTINUATION positif di validasi, sedangkan HH_HL, MOMENTUM_CONTINUATION, dan
+EMA20_PULLBACK negatif. Angka ini dari data lama (histori sejak 2017) dan akan dihitung ulang di Neon oleh Weekly
+Backtest. Dashboard kini menampilkan ringkasan ini di Market Overview dan Top Swing Stocks.
+
 ## 7. Operasional cloud
 
 - Jadwal GitHub Actions tidak presisi dan di repo ini terlambat berjam-jam (CLOUD_OPERATIONS §3).

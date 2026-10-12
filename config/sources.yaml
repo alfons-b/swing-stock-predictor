@@ -34,5 +34,8 @@ universe:
   # Opsional: file sektor terpisah (kolom Kode/ticker + Sektor/sector [+ Subsektor/subsector]).
   # Daftar Saham BEI tidak memuat sektor; tanpa file ini sektor diisi bertahap dari Yahoo (taksonomi Yahoo).
   sectors_file: null
+  # Emiten tanpa sektor yang dicek ke Yahoo per run (antrean berputar: yang paling lama tidak dicek duluan).
+  # ±0,5–1 detik per emiten. Workflow Fundamental Refresh (Sabtu) menjalankan `sectors-update` untuk seluruh sisa.
+  sector_enrich_per_run: 100
   ticker_changes_file: config/ticker_changes.yaml
   min_ratio_to_deactivate: 0.5   # tolak deaktivasi massal bila daftar baru < 50% jumlah aktif (respons parsial)

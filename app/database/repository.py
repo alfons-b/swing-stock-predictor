@@ -38,6 +38,10 @@ class Repository:
         return self.db.upsert("stocks", d, keys=["ticker"],
                               update=[c for c in cols if c not in ("first_seen", "previous_ticker")])
 
+    def mark_sector_checked(self, tickers: list[str]) -> None:
+        if tickers:
+            self.db.executemany("UPDATE stocks SET sector_checked_at = ? WHERE ticker = ?", [(now_utc(), t) for t in tickers])
+
     def stock_ids(self) -> dict[str, int]:
         return {t: int(i) for i, t in self.db.query("SELECT id, ticker FROM stocks")}
 

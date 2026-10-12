@@ -112,11 +112,11 @@ class YahooFinanceProvider(MarketDataProvider):
         raw["date"] = pd.to_datetime(raw["date"]).dt.tz_localize(None).dt.normalize()
         return raw[["date", "open", "high", "low", "close", "volume"]].dropna(subset=["close"])
 
-    def enrich_universe(self, tickers, limit: int = 40):
+    def enrich_universe(self, tickers, limit: int | None = None):
         """Nama & sektor dari Yahoo (taksonomi Yahoo, bukan IDX-IC). Dibatasi per run agar cepat."""
         yf = _yf()
         rows = []
-        for t in tickers[:limit]:
+        for t in (tickers if limit is None else tickers[:limit]):
             try:
                 info = yf.Ticker(to_provider_symbol(t, self.suffix)).info or {}
                 rows.append({"ticker": t, "name": info.get("longName") or info.get("shortName"),

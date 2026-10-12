@@ -130,14 +130,28 @@ class UniverseManager:
                  len(deactivated), len(renamed))
         return out
 
-    def _enrich_metadata(self) -> None:
+    def _enrich_metadata(self, limit: int | None = None) -> dict:
+        """Isi nama/sektor emiten yang belum punya sektor, maksimal `limit` per panggilan.
+
+        Antrean berputar: yang paling lama tidak dicek didahulukan (`stocks.sector_checked_at`), dan SETIAP emiten
+        yang dicoba ditandai — termasuk yang tidak punya sektor di provider. Tanpa ini emiten tanpa sektor (suspensi,
+        papan pemantauan) selalu berada di depan antrean abjad dan memakan seluruh jatah setiap run, sehingga emiten
+        lain tidak pernah terisi."""
+        limit = int(limit if limit is not None else get(self.cfg, "universe.sector_enrich_per_run", 100))
         st = self.repo.stocks(active_only=True)
-        missing = st[st["sector"].isna() | (st["sector"].astype(str).isin(["", "Unknown", "None"]))]["ticker"].tolist()
-        if not missing:
-            return
+        blank = st["sector"].isna() | st["sector"].astype(str).isin(["", "Unknown", "None"])
+        todo = st[blank].copy()
+        if todo.empty or limit <= 0:
+            return {"missing": int(len(todo)), "attempted": 0, "filled": 0}
+        checked = pd.to_datetime(todo.get("sector_checked_at"), errors="coerce", utc=True) \
+            if "sector_checked_at" in todo else pd.Series(pd.NaT, index=todo.index)
+        todo = todo.assign(_c=checked).sort_values(["_c", "ticker"], na_position="first")
+        attempt = todo["ticker"].head(limit).tolist()
+        missing = list(attempt)
+        filled = 0
         for prov in self.chain.providers:
             try:
-                e = prov.enrich_universe(missing)
+                e = prov.enrich_universe(missing, limit=len(missing))
             except Exception:
                 continue
             e = e.dropna(subset=["sector"])
@@ -148,6 +162,12 @@ class UniverseManager:
                         cur[col] = e.set_index("ticker").loc[cur["ticker"], col].values
                 cur["updated_at"] = now_utc()
                 self.repo.upsert_stocks(cur)
+                filled += len(e)
                 missing = [t for t in missing if t not in set(e["ticker"])]
             if not missing:
                 break
+        self.repo.mark_sector_checked(attempt)
+        left = int(blank.sum()) - filled
+        log.info("Sektor: %d emiten dicek, %d terisi, %d masih tanpa sektor", len(attempt), filled, left,
+                 extra={"persist": True})
+        return {"missing": left, "attempted": len(attempt), "filled": filled}

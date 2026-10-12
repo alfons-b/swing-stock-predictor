@@ -28,6 +28,7 @@ except Exception:
 
 from app.config import get, load_config  # noqa: E402
 from app.pipeline.context import AppContext  # noqa: E402
+from app.reporting import dashboard_helpers as H  # noqa: E402
 
 UP, DOWN, ACCENT, INK = "#12805C", "#C23B32", "#2E5AAC", "#15232D"
 st.set_page_config(page_title="Swing Stock Predictor — BEI", layout="wide")
@@ -100,6 +101,12 @@ def research_ready() -> str | None:
                     "**Daily Market Pipeline** sekali (Actions → Run workflow) — migrasi berjalan otomatis — lalu muat ulang.")
     return None
 
+_banner = H.database_banner(c.db)
+if _banner:
+    (st.error if _banner[0] == "error" else st.warning)(_banner[1])
+    if _banner[0] == "error":
+        st.stop()
+
 PAGES = ["Market Overview", "Full-Market Coverage", "Top Swing Stocks", "Sector Strength", "Stock Detail", "Undervalued Screener", "Foreign Flow",
          "Accumulation / Distribution", "Integrated Research", "Prediction History", "Backtest", "Model Performance",
          "Pipeline Status", "Data Health"]
@@ -107,6 +114,21 @@ page = st.sidebar.radio("Halaman", PAGES)
 st.sidebar.caption("Analytical decision support — bukan jaminan profit. Bukan nasihat investasi.")
 
 last_sig_date = c.db.scalar("SELECT MAX(signal_date) FROM trading_signals") or c.db.scalar("SELECT MAX(prediction_date) FROM predictions")
+last_sig_date = str(last_sig_date)[:10] if last_sig_date else None
+st.sidebar.caption(H.connection_caption(c.db, last_sig_date))
+
+
+@st.cache_data(ttl=600)
+def latest_test_backtest():
+    """Run walk-forward TEST terbaru (out-of-sample) → (metrics, benchmark) untuk peringatan kinerja strategi."""
+    r = q("SELECT metrics, benchmark FROM backtest_runs WHERE run_id LIKE 'wf-test-%' ORDER BY created_at DESC LIMIT 1")
+    return (jl(r["metrics"].iloc[0]), jl(r["benchmark"].iloc[0])) if len(r) else (None, None)
+
+
+def show_strategy_verdict():
+    v = H.strategy_verdict(*latest_test_backtest())
+    if v:
+        (st.warning if v[0] == "warning" else st.info)(v[1])
 
 if page == "Market Overview":
     ix = q("SELECT date, close FROM market_index WHERE symbol = ? ORDER BY date DESC LIMIT 500", (get(c.cfg, "data.index_id"),))
@@ -114,11 +136,16 @@ if page == "Market Overview":
             "ORDER BY started_at DESC LIMIT 1")
     s = jl(run["summary"].iloc[0]) if len(run) and run["summary"].iloc[0] else {}
     st.title(f"Pasar {last_sig_date or '–'}: {s.get('regime', 'n/a')}")
+    st.subheader(s.get("headline", "–"))
     k = st.columns(4)
-    k[0].metric("Status pipeline terakhir", run["status"].iloc[0] if len(run) else "–")
-    k[1].metric("Data", run["data_status"].iloc[0] if len(run) else "–")
-    k[2].metric("Headline", s.get("headline", "–")[:30])
-    k[3].metric("Rekomendasi", len(s.get("top", [])))
+    k[0].metric("Status pipeline", run["status"].iloc[0] if len(run) else "–")
+    k[1].metric("Data", (run["data_status"].iloc[0] or "–").replace("_", " ").title() if len(run) else "–")
+    k[2].metric("Rekomendasi BUY", len(s.get("top", [])))
+    cs = s.get("coverage") or {}
+    k[3].metric("Layak sinyal", f"{cs['signal_eligible']}/{cs['total_universe']}" if cs.get("total_universe") else "–")
+    if len(run):
+        st.caption(f"Run {run['run_id'].iloc[0]} · mulai {str(run['started_at'].iloc[0])[:16]} UTC")
+    show_strategy_verdict()
     if len(ix):
         ix = ix.sort_values("date")
         st.plotly_chart(go.Figure(go.Scatter(x=pd.to_datetime(ix["date"]), y=pd.to_numeric(ix["close"]), line=dict(color=INK)))
@@ -132,8 +159,10 @@ elif page == "Full-Market Coverage":
     from app.scanner.coverage import STATUSES
     try:
         cov = c.repo.coverage()
-    except Exception:
-        cov = pd.DataFrame()
+    except Exception as e:
+        st.error(f"Tabel `scan_coverage` tidak bisa dibaca ({type(e).__name__}). Pastikan dashboard tersambung ke "
+                 "database Neon dan role dashboard punya izin SELECT (GRANT SELECT ON ALL TABLES IN SCHEMA public …).")
+        st.stop()
     if cov.empty:
         st.info("Belum ada data cakupan. Tabel `scan_coverage` diisi oleh workflow Daily Market Pipeline.")
         st.stop()
@@ -157,19 +186,35 @@ elif page == "Full-Market Coverage":
 
 elif page == "Top Swing Stocks":
     st.title(f"Top swing stocks — {last_sig_date or '–'}")
+    show_strategy_verdict()
     sig = q("SELECT * FROM trading_signals WHERE signal_date = ? ORDER BY rank", (last_sig_date,)) if last_sig_date else pd.DataFrame()
+    det = q("SELECT ticker, setup, score, prob_bullish, market_regime, reasons, risks FROM predictions "
+            "WHERE prediction_date = ? AND decision = 'BUY' ORDER BY score DESC", (last_sig_date,)) if last_sig_date else pd.DataFrame()
+    inside, outside = H.split_buys(det, sig)
+
+    def _detail(r):
+        with st.expander(r.ticker):
+            a, b = st.columns(2)
+            a.markdown("**Alasan**\n" + "\n".join(f"- {x}" for x in jl(r.reasons)))
+            b.markdown("**Risiko**\n" + ("\n".join(f"- {x}" for x in jl(r.risks)) or "- tidak ada yang menonjol"))
+
     if sig.empty:
         st.subheader("NO HIGH-CONVICTION SETUP TODAY")
         st.write("Tidak ada saham yang lolos semua filter risiko. Menunggu adalah posisi yang sah.")
     else:
         st.dataframe(sig[["rank", "ticker", "setup", "score", "prob_bullish", "expected_return", "entry_low", "entry_ideal", "entry_high",
                           "stop_loss", "tp1", "tp2", "risk_reward", "lots", "confidence", "decision"]], hide_index=True, use_container_width=True)
-        det = q("SELECT ticker, reasons, risks FROM predictions WHERE prediction_date = ? AND decision = 'BUY'", (last_sig_date,))
-        for r in det.itertuples():
-            with st.expander(r.ticker):
-                a, b = st.columns(2)
-                a.markdown("**Alasan**\n" + "\n".join(f"- {x}" for x in jl(r.reasons)))
-                b.markdown("**Risiko**\n" + ("\n".join(f"- {x}" for x in jl(r.risks)) or "- tidak ada yang menonjol"))
+        for r in inside.itertuples():
+            _detail(r)
+    if len(outside):
+        regime = outside["market_regime"].iloc[0]
+        cap = get(c.cfg, f"regime.rules.{regime}.max_recommendations")
+        st.subheader("BUY di luar ranking")
+        st.caption(f"Lolos semua filter, tetapi tidak direkomendasikan karena regime {regime} membatasi rekomendasi "
+                   f"maksimal {cap} saham per hari. Bukan sinyal untuk dieksekusi.")
+        st.dataframe(outside[["ticker", "setup", "score", "prob_bullish"]], hide_index=True, use_container_width=True)
+        for r in outside.itertuples():
+            _detail(r)
     w = q("SELECT ticker, setup, score, prob_bullish, reject_reasons FROM predictions WHERE prediction_date = ? AND decision = 'WATCHLIST' "
           "ORDER BY score DESC LIMIT 15", (last_sig_date,)) if last_sig_date else pd.DataFrame()
     if len(w):
@@ -215,6 +260,8 @@ elif page == "Stock Detail":
     fig.add_trace(go.Bar(x=g["date"], y=g["volume"], marker_color=np.where(g["close"] >= g["open"], UP, DOWN), name="Volume"), 2, 1)
     fig.add_trace(go.Scatter(x=g["date"], y=g["rsi14"], line=dict(color=INK, width=1), name="RSI14"), 3, 1)
     fig.update_layout(height=720, xaxis_rangeslider_visible=False, showlegend=False, margin=dict(l=10, r=10, t=10, b=10))
+    # tanpa celah akhir pekan / libur bursa / hari suspensi
+    fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"]), dict(values=H.missing_business_days(g["date"]))])
     st.plotly_chart(fig, use_container_width=True)
     if len(p):
         r = p.iloc[0]
@@ -230,6 +277,8 @@ elif page == "Prediction History":
     dec = st.multiselect("Keputusan", ["BUY", "WATCHLIST", "WAIT", "AVOID"], default=["BUY", "WATCHLIST"])
     h = c.repo.prediction_history(20000)
     h = h[h["decision"].isin(dec)]
+    if len(h):
+        h = h.assign(prediction_date=pd.to_datetime(h["prediction_date"]).dt.strftime("%Y-%m-%d"))
     ev = h[h["outcome"].notna()]
     if len(ev):
         k = st.columns(4)
@@ -245,17 +294,29 @@ elif page == "Backtest":
     if runs.empty:
         st.info("Belum ada backtest (workflow Weekly Backtest).")
         st.stop()
-    rid = st.selectbox("Run", runs["run_id"])
+    st.caption("wf-test = out-of-sample terbaru (paling relevan) · wf-validation = periode validasi · "
+               "live = sinyal produksi · modules = evaluasi modul riset per varian. Semua angka setelah biaya.")
+    rid = st.selectbox("Run", runs["run_id"], index=H.default_backtest_run(runs))
     r = runs[runs["run_id"] == rid].iloc[0]
     m, b = jl(r["metrics"]), jl(r["benchmark"])
-    if isinstance(m, dict):
+    kpi = H.backtest_kpis(m)
+    if kpi:
+        b = b if isinstance(b, dict) else {}
         k = st.columns(5)
-        k[0].metric("Total return", f"{m.get('total_return', 0):+.1%}")
-        k[1].metric("Max drawdown", f"{m.get('max_drawdown', 0):.1%}")
-        k[2].metric("Sharpe", f"{m.get('sharpe', 0):.2f}")
-        k[3].metric("Trades", m.get("number_of_trades", 0))
-        bh = (b or {}).get("ihsg_buy_hold", {}) if isinstance(b, dict) else {}
-        k[4].metric("IHSG buy & hold", f"{bh.get('total_return', 0):+.1%}" if bh else "n/a")
+        k[0].metric("Total return", f"{kpi['total_return']:+.1%}")
+        k[1].metric("Max drawdown", f"{kpi['max_drawdown']:.1%}")
+        k[2].metric("Sharpe", f"{kpi['sharpe']:.2f}")
+        k[3].metric("Trades", kpi["number_of_trades"])
+        bh = b.get("ihsg_buy_hold") or {}
+        k[4].metric("IHSG buy & hold", f"{bh['total_return']:+.1%}" if bh.get("total_return") is not None else "n/a")
+        if b.get("technical_only", {}).get("total_return") is not None:
+            st.caption(f"Pembanding teknikal-saja (tanpa ML): {b['technical_only']['total_return']:+.1%}, "
+                       f"Sharpe {(b['technical_only'].get('sharpe') or float('nan')):.2f}")
+    elif isinstance(m, dict) and m.get("periods"):
+        st.subheader("Perbandingan varian (setelah biaya)")
+        vt = H.module_variant_table(m)
+        st.dataframe(vt, hide_index=True, use_container_width=True)
+    with st.expander("Detail lengkap (JSON)"):
         st.json({"strategy": m, "benchmark": b})
     t = q("SELECT * FROM backtest_trades WHERE backtest_run_id = ? ORDER BY entry_date", (rid,))
     st.dataframe(t, hide_index=True, use_container_width=True)

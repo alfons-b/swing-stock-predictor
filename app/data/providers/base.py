@@ -48,6 +48,6 @@ class MarketDataProvider:
         ix = self.get_index(pd.Timestamp.today() - pd.Timedelta(days=15), None)
         return pd.Timestamp(ix["date"].max()) if len(ix) else None
 
-    def enrich_universe(self, tickers: list[str]) -> pd.DataFrame:
+    def enrich_universe(self, tickers: list[str], limit: int | None = None) -> pd.DataFrame:
         """Opsional: nama/sektor untuk ticker yang belum punya metadata."""
         return pd.DataFrame(columns=["ticker", "name", "sector"])
