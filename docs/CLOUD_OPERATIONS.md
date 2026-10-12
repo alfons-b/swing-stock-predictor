@@ -126,6 +126,8 @@ run berikutnya menunggu, tidak dibatalkan.
 | Run gagal bila > 50% ticker gagal (`FAILED`), sebagian gagal → `PARTIAL_SUCCESS` | `jobs._ingest` |
 | Cakupan < `coverage.min_coverage_pct` (80%) → `PARTIAL_SUCCESS` + peringatan | `jobs._record_coverage` |
 | Retry koneksi database (cold start Neon) | `PostgresDatabase.connect` |
+| Query baca langsung menutup transaksinya, sehingga tidak ada sesi *idle in transaction* selama komputasi panjang (Neon memutus sesi seperti itu; insiden Initial Setup 12 Okt 2026) | `Database._run(read=True)` |
+| Koneksi yang diputus server dibuka ulang dan operasinya diulang **sekali**, hanya di luar `transaction()` | `Database._run` |
 | Pemulihan storage penuh sebelum menulis | `jobs.ensure_writable` |
 | Exit code: 0 sukses, 1 gagal, 2 config, 3 health kritis → GitHub menandai run merah | `main.py` |
 | Notifikasi kegagalan | email GitHub bawaan untuk workflow gagal; Telegram/webhook opsional |
