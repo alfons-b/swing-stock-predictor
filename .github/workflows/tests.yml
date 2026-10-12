@@ -56,7 +56,11 @@ jobs:
         # tanpa membuka log lengkap.
         run: |
           set -o pipefail
-          pytest -q -rfE tests/test_connection_resilience.py -k Postgres 2>&1 | tee pytest.log || {
+          echo "::notice title=env::TEST_POSTGRES_URL set=${TEST_POSTGRES_URL:+yes}"
+          pytest -q -rfEs tests/test_connection_resilience.py -k Postgres 2>&1 | tee pytest.log; rc=$?
+          echo "::notice title=summary::$(tail -1 pytest.log)"
+          grep -E "SKIPPED" pytest.log | head -5 | sed 's/^/::notice title=skip::/'
+          [ $rc -eq 0 ] || {
             grep -E "^(FAILED|ERROR) " pytest.log | head -20 | sed 's/^/::error title=pytest::/'
             exit 1
           }
