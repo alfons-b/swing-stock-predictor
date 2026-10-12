@@ -57,7 +57,7 @@ jobs:
         run: |
           set -o pipefail
           echo "::notice title=env::TEST_POSTGRES_URL set=${TEST_POSTGRES_URL:+yes}"
-          pytest -q -rfEs tests/test_connection_resilience.py -k Postgres 2>&1 | tee pytest.log; rc=$?
+          rc=0; pytest -q -rfEs tests/test_connection_resilience.py -k Postgres > pytest.log 2>&1 || rc=$?; cat pytest.log
           echo "::notice title=summary::$(tail -1 pytest.log)"
           grep -E "SKIPPED" pytest.log | head -5 | sed 's/^/::notice title=skip::/'
           [ $rc -eq 0 ] || {
