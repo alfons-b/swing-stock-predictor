@@ -88,7 +88,11 @@ class Database:
             self._conn = None
 
     def _sql(self, sql: str) -> str:
-        return sql if self.placeholder == "?" else sql.replace("?", self.placeholder)
+        """Placeholder `?` → `%s` untuk psycopg. `%` literal (mis. LIKE 'wf-test-%') di-escape menjadi `%%`, karena
+        psycopg membaca setiap `%` sebagai penanda parameter (ProgrammingError — insiden dashboard 13 Okt 2026)."""
+        if self.placeholder == "?":
+            return sql
+        return sql.replace("%", "%%").replace("?", self.placeholder)
 
     def _recover(self) -> None:
         """Setelah statement gagal: PostgreSQL menandai transaksi 'aborted' dan MENOLAK semua query berikutnya

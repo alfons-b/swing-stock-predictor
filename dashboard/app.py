@@ -121,7 +121,7 @@ st.sidebar.caption(H.connection_caption(c.db, last_sig_date))
 @st.cache_data(ttl=600)
 def latest_test_backtest():
     """Run walk-forward TEST terbaru (out-of-sample) → (metrics, benchmark) untuk peringatan kinerja strategi."""
-    r = q("SELECT metrics, benchmark FROM backtest_runs WHERE run_id LIKE 'wf-test-%' ORDER BY created_at DESC LIMIT 1")
+    r = q("SELECT metrics, benchmark FROM backtest_runs WHERE run_id LIKE ? ORDER BY created_at DESC LIMIT 1", ("wf-test-%",))
     return (jl(r["metrics"].iloc[0]), jl(r["benchmark"].iloc[0])) if len(r) else (None, None)
 
 
