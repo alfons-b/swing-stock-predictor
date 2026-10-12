@@ -1,6 +1,6 @@
-# Pemeliharaan database (retensi + VACUUM). Mencegah kuota Supabase gratis (500 MB) terlampaui:
-# di atas kuota, project menjadi READ-ONLY dan daily pipeline gagal. Daily juga menjalankan retensi
-# otomatis bila ukuran ≥ 85% batas; workflow ini menambah VACUUM bulanan dan opsi FULL.
+# Pemeliharaan database (retensi + VACUUM). Mencegah kuota storage paket gratis terlampaui (Neon Free 1 GB:
+# di atas kuota penulisan diblokir dan daily pipeline gagal). Daily juga menjalankan retensi otomatis bila
+# ukuran ≥ 85% batas; workflow ini menambah VACUUM bulanan dan opsi FULL.
 name: Database Maintenance
 
 on:
@@ -32,7 +32,7 @@ jobs:
       APP_ENV: production
       TZ: Asia/Jakarta
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      DB_SIZE_LIMIT_MB: ${{ vars.DB_SIZE_LIMIT_MB || '500' }}
+      DB_SIZE_LIMIT_MB: ${{ vars.DB_SIZE_LIMIT_MB }}          # kosong = otomatis dari provider (Neon 950 MB)
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7

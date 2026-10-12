@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from app.database.db import Database
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 TYPES = {
     "sqlite": {"ID": "INTEGER PRIMARY KEY AUTOINCREMENT", "TEXT": "TEXT", "INT": "INTEGER", "REAL": "REAL",
@@ -144,6 +144,13 @@ TABLES = [
                               ("stage", "TEXT", ""), ("confidence", "TEXT", ""), ("components", "JSON", ""),
                               ("evidence", "JSON", ""), ("foreign_flow_status", "TEXT", ""), ("run_id", "TEXT", "")],
      [["stock_id", "date"]], [["date"]]),
+    # Cakupan pemindaian per emiten per tanggal (app/scanner/coverage.py). ±120 B/baris × ±960 emiten × ±245 hari
+    # ≈ 28 MB/tahun → dibatasi retention.scan_coverage_days. Ringkasan per run tetap ada di pipeline_runs.summary.
+    ("scan_coverage", [("id", "ID", ""), ("scan_date", "DATE", "NOT NULL"), ("stock_id", "INT", "NOT NULL REFERENCES stocks(id)"),
+                       ("ticker", "TEXT", "NOT NULL"), ("status", "TEXT", "NOT NULL"), ("reason", "TEXT", ""),
+                       ("last_data_date", "DATE", ""), ("history_rows", "INT", ""), ("run_id", "TEXT", ""),
+                       ("created_at", "TS", "")],
+     [["scan_date", "stock_id"]], [["scan_date", "status"]]),
     ("schema_migrations", [("version", "INT", "PRIMARY KEY"), ("applied_at", "TS", "")], [], []),
 ]
 
@@ -223,7 +230,7 @@ def migrate(db: Database) -> int:
     conflicts = check_compatibility(db)
     if conflicts:
         hint = ("hapus file database lokal (data/local.db) agar dibuat ulang" if db.dialect == "sqlite" else
-                "pakai project Supabase baru/kosong, atau hapus tabel lama tersebut di SQL Editor")
+                "pakai database/branch Neon baru yang kosong khusus proyek ini, atau hapus tabel lama tersebut")
         raise SchemaConflictError(
             "Database sudah berisi tabel dari program lain yang tidak cocok dengan proyek ini: "
             + "; ".join(conflicts[:8]) + (f" (+{len(conflicts) - 8} lagi)" if len(conflicts) > 8 else "")
@@ -240,6 +247,6 @@ def migrate(db: Database) -> int:
 
 
 def postgres_sql_file() -> str:
-    head = ("-- Skema PostgreSQL untuk Supabase (dihasilkan oleh `python main.py db-schema`).\n"
-            "-- Opsional: jalankan di Supabase SQL Editor. `python main.py setup` juga membuatnya otomatis.\n\n")
+    head = ("-- Skema PostgreSQL (Neon / PostgreSQL apa pun). Dihasilkan oleh `python main.py db-schema`.\n"
+            "-- Opsional: jalankan di SQL Editor provider. `python main.py setup` juga membuatnya otomatis.\n\n")
     return head + ";\n\n".join(render_ddl("postgres")) + ";\n"

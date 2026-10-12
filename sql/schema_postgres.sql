@@ -1,5 +1,5 @@
--- Skema PostgreSQL untuk Supabase (dihasilkan oleh `python main.py db-schema`).
--- Opsional: jalankan di Supabase SQL Editor. `python main.py setup` juga membuatnya otomatis.
+-- Skema PostgreSQL (Neon / PostgreSQL apa pun). Dihasilkan oleh `python main.py db-schema`.
+-- Opsional: jalankan di SQL Editor provider. `python main.py setup` juga membuatnya otomatis.
 
 CREATE TABLE IF NOT EXISTS stocks (
   id BIGSERIAL PRIMARY KEY,
@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS stocks (
   is_active BOOLEAN NOT NULL,
   previous_ticker TEXT,
   listed_shares DOUBLE PRECISION,
+  fundamentals_checked_at TIMESTAMPTZ,
   first_seen TIMESTAMPTZ,
   last_seen TIMESTAMPTZ,
   updated_at TIMESTAMPTZ,
@@ -122,6 +123,17 @@ CREATE TABLE IF NOT EXISTS predictions (
   reject_reasons TEXT,
   run_id TEXT,
   created_at TIMESTAMPTZ,
+  value_score DOUBLE PRECISION,
+  quality_score DOUBLE PRECISION,
+  value_trap_risk TEXT,
+  margin_of_safety DOUBLE PRECISION,
+  valuation_status TEXT,
+  foreign_flow_score DOUBLE PRECISION,
+  foreign_flow_status TEXT,
+  accumulation_score DOUBLE PRECISION,
+  distribution_risk DOUBLE PRECISION,
+  accumulation_status TEXT,
+  accumulation_stage TEXT,
   UNIQUE (prediction_date, stock_id, model_version)
 );
 
@@ -254,6 +266,10 @@ CREATE TABLE IF NOT EXISTS data_sources (
   last_error_at TIMESTAMPTZ,
   last_error TEXT,
   rows_fetched_total BIGINT,
+  category TEXT,
+  status TEXT,
+  detail TEXT,
+  checked_at TIMESTAMPTZ,
   UNIQUE (name)
 );
 
@@ -278,6 +294,105 @@ CREATE TABLE IF NOT EXISTS reports (
   run_id TEXT,
   created_at TIMESTAMPTZ,
   UNIQUE (report_date, kind, filename)
+);
+
+CREATE TABLE IF NOT EXISTS financial_statements (
+  id BIGSERIAL PRIMARY KEY,
+  stock_id BIGINT NOT NULL REFERENCES stocks(id),
+  period_end DATE NOT NULL,
+  period_type TEXT NOT NULL,
+  fiscal_year BIGINT,
+  currency TEXT,
+  items TEXT,
+  items_hash TEXT,
+  publication_date DATE,
+  first_known_date DATE NOT NULL,
+  estimated_available_date DATE,
+  retrieved_at TIMESTAMPTZ,
+  source TEXT NOT NULL,
+  version BIGINT NOT NULL,
+  quality_status TEXT,
+  quality_notes TEXT,
+  UNIQUE (stock_id, period_end, period_type, source, version)
+);
+
+CREATE TABLE IF NOT EXISTS valuation_results (
+  id BIGSERIAL PRIMARY KEY,
+  stock_id BIGINT NOT NULL REFERENCES stocks(id),
+  as_of_date DATE NOT NULL,
+  price DOUBLE PRECISION,
+  sector_type TEXT,
+  fair_value_low DOUBLE PRECISION,
+  fair_value_base DOUBLE PRECISION,
+  fair_value_high DOUBLE PRECISION,
+  margin_of_safety DOUBLE PRECISION,
+  margin_of_safety_conservative DOUBLE PRECISION,
+  valuation_status TEXT,
+  valuation_confidence TEXT,
+  value_score DOUBLE PRECISION,
+  quality_score DOUBLE PRECISION,
+  value_trap_risk TEXT,
+  methods TEXT,
+  metrics TEXT,
+  value_trap_reasons TEXT,
+  fundamentals_known_date DATE,
+  fundamentals_period_end DATE,
+  data_status TEXT,
+  run_id TEXT,
+  created_at TIMESTAMPTZ,
+  UNIQUE (stock_id, as_of_date)
+);
+
+CREATE TABLE IF NOT EXISTS foreign_flow_history (
+  id BIGSERIAL PRIMARY KEY,
+  stock_id BIGINT NOT NULL REFERENCES stocks(id),
+  date DATE NOT NULL,
+  market_segment TEXT NOT NULL,
+  foreign_buy_shares DOUBLE PRECISION,
+  foreign_sell_shares DOUBLE PRECISION,
+  net_foreign_shares DOUBLE PRECISION,
+  foreign_buy_value DOUBLE PRECISION,
+  foreign_sell_value DOUBLE PRECISION,
+  net_foreign_value DOUBLE PRECISION,
+  value_type TEXT,
+  total_volume_shares DOUBLE PRECISION,
+  units TEXT,
+  source TEXT,
+  source_timestamp TIMESTAMPTZ,
+  retrieved_at TIMESTAMPTZ,
+  quality_status TEXT,
+  quality_notes TEXT,
+  UNIQUE (stock_id, date, market_segment)
+);
+
+CREATE TABLE IF NOT EXISTS accumulation_signals (
+  id BIGSERIAL PRIMARY KEY,
+  stock_id BIGINT NOT NULL REFERENCES stocks(id),
+  date DATE NOT NULL,
+  accumulation_score DOUBLE PRECISION,
+  distribution_risk DOUBLE PRECISION,
+  status TEXT,
+  stage TEXT,
+  confidence TEXT,
+  components TEXT,
+  evidence TEXT,
+  foreign_flow_status TEXT,
+  run_id TEXT,
+  UNIQUE (stock_id, date)
+);
+
+CREATE TABLE IF NOT EXISTS scan_coverage (
+  id BIGSERIAL PRIMARY KEY,
+  scan_date DATE NOT NULL,
+  stock_id BIGINT NOT NULL REFERENCES stocks(id),
+  ticker TEXT NOT NULL,
+  status TEXT NOT NULL,
+  reason TEXT,
+  last_data_date DATE,
+  history_rows BIGINT,
+  run_id TEXT,
+  created_at TIMESTAMPTZ,
+  UNIQUE (scan_date, stock_id)
 );
 
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -320,3 +435,13 @@ CREATE INDEX IF NOT EXISTS ix_system_logs_run_id ON system_logs (run_id);
 CREATE INDEX IF NOT EXISTS ix_system_logs_ts ON system_logs (ts);
 
 CREATE INDEX IF NOT EXISTS ix_reports_report_date ON reports (report_date);
+
+CREATE INDEX IF NOT EXISTS ix_financial_statements_stock_id_first_known_date ON financial_statements (stock_id, first_known_date);
+
+CREATE INDEX IF NOT EXISTS ix_valuation_results_as_of_date ON valuation_results (as_of_date);
+
+CREATE INDEX IF NOT EXISTS ix_foreign_flow_history_date ON foreign_flow_history (date);
+
+CREATE INDEX IF NOT EXISTS ix_accumulation_signals_date ON accumulation_signals (date);
+
+CREATE INDEX IF NOT EXISTS ix_scan_coverage_scan_date_status ON scan_coverage (scan_date, status);

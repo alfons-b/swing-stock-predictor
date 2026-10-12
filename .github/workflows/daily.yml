@@ -32,9 +32,8 @@ jobs:
     env:
       APP_ENV: production
       TZ: Asia/Jakarta
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}               # Neon (bukan Supabase); lihat docs/CLOUD_OPERATIONS.md
+      DB_SIZE_LIMIT_MB: ${{ vars.DB_SIZE_LIMIT_MB }}          # kosong = otomatis dari provider
       MARKET_DATA_API_KEY: ${{ secrets.MARKET_DATA_API_KEY }}
       FUNDAMENTAL_API_KEY: ${{ secrets.FUNDAMENTAL_API_KEY }}       # opsional: feed fundamental berlisensi
       FOREIGN_FLOW_API_URL: ${{ secrets.FOREIGN_FLOW_API_URL }}     # opsional: API foreign flow vendor

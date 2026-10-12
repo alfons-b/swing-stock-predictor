@@ -10,3 +10,6 @@ models/*.joblib
 reports/*
 !**/.gitkeep
 .streamlit/secrets.toml
+
+# dataset contoh sintetis (python main.py make-sample) — dibuat ulang kapan saja
+data/raw/sample/

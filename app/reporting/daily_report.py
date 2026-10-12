@@ -73,6 +73,9 @@ def markdown_report(summary: dict, sectors: pd.DataFrame) -> str:
     L += ["## Sector ranking", "", "| # | Sektor | Skor | 5H | 20H | 60H | RS 20H | Breadth |", "|---|---|---|---|---|---|---|---|"]
     for r in sectors.itertuples():
         L.append(f"| {r.rank} | {r.sector} | {r.score:.0f} | {pc(r.ret5)} | {pc(r.ret20)} | {pc(r.ret60)} | {pc(r.rs20)} | {pc(r.breadth, False)} |")
+    if summary.get("coverage"):
+        from app.scanner.coverage import coverage_markdown
+        L += [""] + coverage_markdown(summary["coverage"])
     L += ["", f"_{summary['disclaimer']}_"]
     return "\n".join(L)
 

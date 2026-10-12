@@ -11,6 +11,7 @@ import pandas as pd
 from app.config import get
 from app.data.tickers import normalize_ticker
 from app.risk.concentration import apply_concentration_limits
+from app.scanner.coverage import apply_coverage_gate
 from app.scanner.ranking import generate_signals, rank_signals
 from app.strategy.explain import build_reasoning, model_drivers
 
@@ -29,7 +30,7 @@ def apply_freshness_gate(sig: pd.DataFrame, freshness: dict) -> pd.DataFrame:
     return sig
 
 
-def scan_day(cfg: dict, df: pd.DataFrame, model, freshness: dict, date=None) -> dict:
+def scan_day(cfg: dict, df: pd.DataFrame, model, freshness: dict, date=None, coverage: pd.DataFrame | None = None) -> dict:
     d = pd.Timestamp(date) if date is not None else df["date"].max()
     day = df[df["date"] == d].reset_index(drop=True)
     if day.empty:
@@ -37,6 +38,7 @@ def scan_day(cfg: dict, df: pd.DataFrame, model, freshness: dict, date=None) -> 
     pred = model.predict(day)
     sig = generate_signals(day, pred, cfg)
     sig = apply_freshness_gate(sig, freshness)
+    sig = apply_coverage_gate(sig, coverage)          # BUY hanya untuk status cakupan SUCCESS
     sig = apply_concentration_limits(sig, cfg, df[df["date"] <= d])
     ranked = rank_signals(sig, cfg)
     return {"date": d, "signals": sig, "ranked": ranked, "pred": pred}

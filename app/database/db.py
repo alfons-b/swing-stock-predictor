@@ -1,4 +1,4 @@
-"""Database abstraction — SQLite (dev/test/CI) dan PostgreSQL (production / Supabase).
+"""Database abstraction — SQLite (dev/test/CI) dan PostgreSQL (production: Neon, lihat docs/DATABASE_DECISION.md).
 
 Keputusan desain: lapisan tipis di atas DB-API (sqlite3 / psycopg 3), bukan ORM.
 - Semua SQL ditulis dengan placeholder `?`; dikonversi ke `%s` untuk Postgres.
@@ -218,6 +218,7 @@ class Database:
 class SQLiteDatabase(Database):
     dialect = "sqlite"
     placeholder = "?"
+    provider = "sqlite"
 
     def __init__(self, url: str, root=None):
         super().__init__(url)
@@ -245,20 +246,34 @@ class PostgresDatabase(Database):
     dialect = "postgres"
     placeholder = "%s"
 
+    def __init__(self, url: str):
+        from app.database.providers import normalize_url, profile_for
+        super().__init__(normalize_url(url))
+        self.profile = profile_for(url)
+
+    @property
+    def provider(self) -> str:
+        return self.profile.name
+
     def connect(self):
         try:
             import psycopg
         except ImportError as e:  # pragma: no cover
             raise DatabaseError("psycopg belum terpasang: pip install 'psycopg[binary]'") from e
         last = None
-        for attempt in range(3):  # Supabase pooler kadang menolak koneksi sesaat
+        # Neon scale-to-zero: compute yang suspend butuh beberapa detik untuk bangun; pooler terkelola kadang
+        # menolak koneksi sesaat. Backoff 1,2,4,8,15 s (dibatasi) — total < 1 menit pada kasus terburuk.
+        for attempt in range(self.profile.connect_attempts):
             try:
-                return psycopg.connect(self.url, connect_timeout=20, prepare_threshold=None)
+                return psycopg.connect(self.url, connect_timeout=self.profile.connect_timeout_s, prepare_threshold=None)
             except Exception as e:  # pragma: no cover - jaringan
                 last = e
-                time.sleep(2 ** attempt)
-        raise DatabaseError(f"Gagal konek ke PostgreSQL: {type(last).__name__}") from last
+                if attempt + 1 < self.profile.connect_attempts:
+                    time.sleep(min(2 ** attempt, 15))
+        # Pesan error driver bisa memuat host; tidak pernah memuat password (psycopg menyamarkannya).
+        raise DatabaseError(f"Gagal konek ke PostgreSQL ({self.provider}) setelah {self.profile.connect_attempts} "
+                            f"percobaan: {type(last).__name__}") from last
 
     def describe(self) -> str:
         u = urlparse(self.url)
-        return f"postgres:{u.hostname}:{u.port or 5432}{u.path}"  # tanpa user/password
+        return f"postgres[{self.provider}]:{u.hostname}:{u.port or 5432}{u.path}"  # tanpa user/password

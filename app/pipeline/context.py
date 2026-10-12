@@ -22,6 +22,23 @@ from app.utils.logging_utils import get_logger
 log = get_logger(__name__)
 
 
+def guard_production_database(cfg: dict, db: Database) -> None:
+    """Aturan proyek: database produksi TIDAK boleh project Supabase (dipakai aplikasi lain milik pemilik repo).
+
+    Dicek SEBELUM migrasi, agar workflow yang masih memakai secret lama gagal jelas (exit 2) alih-alih membuat
+    atau mengubah tabel di Supabase. Override sadar: ALLOW_SUPABASE_DATABASE=true (mis. untuk migrasi data
+    read-only oleh pemilik). Lihat docs/CLOUD_OPERATIONS.md §7."""
+    from app.config import ConfigError, is_production
+    if getattr(db, "provider", None) != "supabase" or not is_production(cfg):
+        return
+    if os.environ.get("ALLOW_SUPABASE_DATABASE", "").strip().lower() in ("1", "true", "yes"):
+        log.warning("DATABASE_URL menunjuk ke Supabase dan ALLOW_SUPABASE_DATABASE=true — melanjutkan atas izin eksplisit")
+        return
+    raise ConfigError("DATABASE_URL menunjuk ke Supabase. Proyek ini harus memakai database terpisah (Neon) dan tidak boleh "
+                      "mengubah project Supabase. Ganti secret DATABASE_URL dengan connection string Neon lalu jalankan "
+                      "workflow Initial Setup (docs/CLOUD_OPERATIONS.md §7).")
+
+
 @dataclass
 class AppContext:
     cfg: dict
@@ -35,6 +52,7 @@ class AppContext:
     @classmethod
     def create(cls, cfg: dict, migrate_db: bool = True) -> "AppContext":
         db = Database.from_url(get(cfg, "database.url"), root=cfg.get("_root"))
+        guard_production_database(cfg, db)
         if migrate_db:
             migrate(db)
         return cls(cfg, db, Repository(db))

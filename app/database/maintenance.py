@@ -1,7 +1,8 @@
 """Pemeliharaan database: retensi data + VACUUM (§55 cost control).
 
-Kenapa perlu: Supabase paket gratis masuk mode READ-ONLY begitu ukuran database > 500 MB
-(https://supabase.com/docs/guides/platform/database-size) — semua penulisan gagal, termasuk daily pipeline.
+Kenapa perlu: semua paket PostgreSQL gratis punya batas storage kecil, dan melewatinya MEMBLOKIR penulisan
+(Neon Free 1 GB/project: write diblokir; Aiven Free 1 GB disk; Supabase Free 500 MB: read-only). Daily pipeline
+lalu gagal setiap hari. Batas efektif per provider ada di app/database/providers.py (override: DB_SIZE_LIMIT_MB).
 
 Diukur di PostgreSQL 16 untuk ~920 emiten:
   predictions + evaluasi ≈ 800 B/baris → ±177 MB/tahun   (pertumbuhan TERBESAR: semua emiten, setiap hari)
@@ -35,7 +36,7 @@ SIGNAL_DECISIONS = ("BUY", "WATCHLIST")
 # --------------------------------------------------------------------------------------------- ukuran
 def database_size_bytes(db: Database) -> int:
     if db.dialect == "postgres":
-        try:  # cara Supabase menghitung kuota: jumlah semua database di cluster
+        try:  # jumlah semua database di cluster (konservatif: Neon/Supabase menghitung kuota per project)
             return int(db.scalar("SELECT SUM(pg_database_size(datname)) FROM pg_database"))
         except Exception:
             db.conn.rollback()
@@ -68,13 +69,14 @@ def is_read_only(db: Database) -> bool:
 
 
 def size_status(cfg: dict, db: Database) -> dict:
-    limit = float(get(cfg, "database.size_limit_mb", 500)) * 1e6
+    from app.database.providers import resolve_size_limit_mb
+    limit = resolve_size_limit_mb(get(cfg, "database.size_limit_mb", "auto"), getattr(db, "url", None)) * 1e6
     size = database_size_bytes(db)
     ratio = size / limit if limit else 0.0
     warn, auto = float(get(cfg, "database.size_warn_ratio", 0.8)), float(get(cfg, "database.auto_maintenance_ratio", 0.85))
     status = "FAIL" if ratio >= 0.95 else "WARN" if ratio >= warn else "OK"
     return {"bytes": size, "limit_bytes": limit, "ratio": ratio, "status": status, "maintenance_due": ratio >= auto,
-            "read_only": is_read_only(db)}
+            "read_only": is_read_only(db), "provider": getattr(db, "provider", db.dialect)}
 
 
 # --------------------------------------------------------------------------------------------- retensi
@@ -90,6 +92,7 @@ def _cutoffs(cfg: dict, today: pd.Timestamp) -> dict:
         .strftime("%Y-%m-%d"),
         "foreign_flow": (today - pd.DateOffset(years=int(get(cfg, "research_retention.foreign_flow_years", 7))))
         .strftime("%Y-%m-%d"),
+        "coverage": (today - pd.Timedelta(days=int(r.get("scan_coverage_days", 120)))).strftime("%Y-%m-%d"),
     }
 
 
@@ -144,6 +147,9 @@ def _plan(cfg: dict, db: Database, today: pd.Timestamp) -> list[dict]:
         {"name": f"foreign flow sebelum {c['foreign_flow']}", "table": "foreign_flow_history",
          "count": "SELECT COUNT(*) FROM foreign_flow_history WHERE date < ?",
          "sql": "DELETE FROM foreign_flow_history WHERE date < ?", "params": [c["foreign_flow"]]},
+        {"name": f"cakupan scan per emiten sebelum {c['coverage']}", "table": "scan_coverage",
+         "count": "SELECT COUNT(*) FROM scan_coverage WHERE scan_date < ?",
+         "sql": "DELETE FROM scan_coverage WHERE scan_date < ?", "params": [c["coverage"]]},
         *val_steps,
         {"name": f"file model lama (selain ACTIVE & {keep_models} terbaru)", "table": "model_versions",
          "count": f"SELECT COUNT(*) FROM model_versions WHERE {old_models}",
@@ -183,7 +189,7 @@ def run_maintenance(cfg: dict, db: Database, today, dry_run: bool = False, full:
     today = pd.Timestamp(today).normalize()
     before = size_status(cfg, db)
     if db.dialect == "postgres":
-        # Supabase read-only mode: izinkan penulisan di sesi ini agar data bisa dihapus (sesuai dokumentasi Supabase)
+        # Mode read-only (Supabase) / transaksi default read-only: izinkan penulisan di sesi ini agar data bisa dihapus
         db.conn.commit()
         db.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE")
     steps = []

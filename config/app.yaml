@@ -7,12 +7,13 @@ project:
   log_level: ${LOG_LEVEL:-INFO}
 
 database:
-  # Production: DATABASE_URL = postgresql://... (Supabase, dari GitHub Secrets)
-  # Development/test: sqlite:///data/local.db
+  # Production: DATABASE_URL = postgresql://... dari GitHub Secrets. Provider utama: Neon (docs/DATABASE_DECISION.md).
+  # BUKAN project Supabase yang dipakai aplikasi lain. Development/test: sqlite:///data/local.db
   url: ${DATABASE_URL:-sqlite:///data/local.db}
   batch_size: 2000
-  # Supabase gratis: > 500 MB → project READ-ONLY (semua penulisan gagal). Health check: WARN ≥ 80%, FAIL ≥ 95%.
-  size_limit_mb: ${DB_SIZE_LIMIT_MB:-500}      # paket Pro: 8000
+  # auto = batas paket gratis provider yang terdeteksi dari host (Neon 950 MB efektif dari 1 GB, Aiven 800 MB,
+  # Supabase 500 MB, Postgres lain 1000 MB). Melewati batas = penulisan diblokir. Health check: WARN ≥ 80%, FAIL ≥ 95%.
+  size_limit_mb: ${DB_SIZE_LIMIT_MB:-auto}     # isi angka (MB) setelah upgrade paket
   disk_limit_mb: ${DB_DISK_LIMIT_MB:-1024}     # ruang disk (untuk VACUUM FULL yang butuh salinan sementara)
   size_warn_ratio: 0.80
   auto_maintenance_ratio: 0.85                 # daily menjalankan retensi otomatis bila ukuran ≥ 85% batas
@@ -23,15 +24,22 @@ retention:                                     # `python main.py db-maintenance`
   system_logs_days: 90
   price_history_years: 7                       # harus >= data.initial_history_years dan >= 5 (walk-forward)
   model_artifacts_keep: 3                      # file model selain ACTIVE yang disimpan; registry & metrik tetap
+  scan_coverage_days: 120                      # status cakupan per emiten (ringkasan per run disimpan selamanya)
+
+coverage:                                      # app/scanner/coverage.py — status per emiten setiap scan
+  # Papan yang eksekusinya tidak dimodelkan backtest → EXCLUDED (tidak pernah BUY). Nilai sesuai kolom
+  # "Papan Pencatatan" Daftar Saham BEI. Kosongkan daftar ([]) untuk menonaktifkan.
+  excluded_boards: ["Pemantauan Khusus"]
+  min_coverage_pct: 80                         # di bawah ini run ditandai PARTIAL_SUCCESS + peringatan
 
 storage:
-  model_backend: ${MODEL_STORAGE:-auto}        # auto | local | database | supabase
-  report_backend: ${REPORT_STORAGE:-auto}      # auto | local | database | supabase
+  model_backend: ${MODEL_STORAGE:-auto}        # auto | local | database  (supabase: legacy, tidak dipakai)
+  report_backend: ${REPORT_STORAGE:-auto}      # auto | local | database  (supabase: legacy, tidak dipakai)
   local_model_dir: models
   local_report_dir: reports
   local_output_dir: data/output
   supabase_bucket: ${SUPABASE_BUCKET:-swing-artifacts}
-  # auto = database bila DATABASE_URL Postgres (persisten di Supabase), local bila SQLite
+  # auto = database bila DATABASE_URL Postgres (persisten di database eksternal), local bila SQLite
 
 calendar:
   timezone: Asia/Jakarta
@@ -48,14 +56,14 @@ scheduler:                                     # HANYA konfigurasi cloud workflo
 
 pipeline:
   scan_lookback_trading_days: 520              # daily hanya memuat ~2 tahun terakhir (cukup untuk SMA200 + 60D)
-  features_snapshot_days: 5                    # tabel features hanya menyimpan snapshot terbaru (hemat storage Supabase)
+  features_snapshot_days: 5                    # tabel features hanya menyimpan snapshot terbaru (hemat storage paket gratis)
   max_failed_ticker_ratio: 0.5                 # > 50% ticker gagal → FAILED (bukan PARTIAL_SUCCESS)
   require_active_model: true
 
 data:
   incremental: true
-  # 6 th: cukup untuk 4 fold walk-forward (butuh ~4,7 th) dan muat di Supabase gratis (500 MB):
-  # price_history ≈ 200 byte/baris → ~950 emiten × 6 th ≈ 275 MB; × 10 th ≈ 455 MB (terlalu besar untuk paket gratis).
+  # 6 th: cukup untuk 4 fold walk-forward (butuh ~4,7 th) dan muat di paket gratis (Neon 1 GB):
+  # price_history ≈ 200 byte/baris → ~950 emiten × 6 th ≈ 275 MB; × 10 th ≈ 455 MB (terlalu besar bersama tabel lain).
   initial_history_years: 6
   start_date: null                             # null = hari ini - initial_history_years
   index_id: COMPOSITE

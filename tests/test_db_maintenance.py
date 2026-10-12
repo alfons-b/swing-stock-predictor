@@ -1,4 +1,4 @@
-"""Retensi & pemeliharaan database (kuota Supabase gratis 500 MB → read-only bila terlampaui)."""
+"""Retensi & pemeliharaan database (kuota storage paket gratis → penulisan diblokir/read-only bila terlampaui)."""
 import unittest
 
 import pandas as pd

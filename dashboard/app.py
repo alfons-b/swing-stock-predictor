@@ -1,4 +1,4 @@
-"""Dashboard production (§44, §45) — membaca database cloud (Supabase), bukan file lokal.
+"""Dashboard production (§44, §45) — membaca database cloud (Neon PostgreSQL), bukan file lokal.
 
 Deploy sebagai WEB SERVICE terpisah dari daily job (Streamlit Community Cloud / Render / Docker).
 Credential: DATABASE_URL dari st.secrets (Streamlit Cloud) atau environment. Dashboard hanya membaca.
@@ -20,7 +20,7 @@ import streamlit as st  # noqa: E402
 from plotly.subplots import make_subplots  # noqa: E402
 
 try:  # Streamlit Cloud: secrets → environment (sebelum config dimuat)
-    for k in ("DATABASE_URL", "SUPABASE_URL", "SUPABASE_KEY", "APP_ENV"):
+    for k in ("DATABASE_URL", "APP_ENV"):
         if k in st.secrets and not os.environ.get(k):
             os.environ[k] = str(st.secrets[k])
 except Exception:
@@ -83,7 +83,7 @@ try:
 except Exception as e:
     st.cache_resource.clear()
     st.error(f"Database tidak bisa diakses: {type(e).__name__}. Periksa DATABASE_URL di secrets "
-             "(connection string Session pooler Supabase), lalu Reboot app.")
+             "(connection string Neon, sebaiknya role read-only), lalu Reboot app.")
     st.stop()
 
 
@@ -100,7 +100,7 @@ def research_ready() -> str | None:
                     "**Daily Market Pipeline** sekali (Actions → Run workflow) — migrasi berjalan otomatis — lalu muat ulang.")
     return None
 
-PAGES = ["Market Overview", "Top Swing Stocks", "Sector Strength", "Stock Detail", "Undervalued Screener", "Foreign Flow",
+PAGES = ["Market Overview", "Full-Market Coverage", "Top Swing Stocks", "Sector Strength", "Stock Detail", "Undervalued Screener", "Foreign Flow",
          "Accumulation / Distribution", "Integrated Research", "Prediction History", "Backtest", "Model Performance",
          "Pipeline Status", "Data Health"]
 page = st.sidebar.radio("Halaman", PAGES)
@@ -127,6 +127,33 @@ if page == "Market Overview":
     if rep:
         with st.expander(f"Daily report terbaru ({rep[0]})"):
             st.components.v1.html(rep[1].decode("utf-8"), height=900, scrolling=True)
+
+elif page == "Full-Market Coverage":
+    from app.scanner.coverage import STATUSES
+    try:
+        cov = c.repo.coverage()
+    except Exception:
+        cov = pd.DataFrame()
+    if cov.empty:
+        st.info("Belum ada data cakupan. Tabel `scan_coverage` diisi oleh workflow Daily Market Pipeline.")
+        st.stop()
+    d = cov["scan_date"].iloc[0]
+    st.title(f"Cakupan pemindaian seluruh universe — {d}")
+    n = len(cov)
+    counts = cov["status"].value_counts()
+    k = st.columns(4)
+    k[0].metric("Universe aktif", n)
+    k[1].metric("Layak sinyal (SUCCESS)", f"{int(counts.get('SUCCESS', 0))} ({counts.get('SUCCESS', 0) / n:.0%})")
+    k[2].metric("Gagal provider", int(counts.get("PROVIDER_ERROR", 0)))
+    k[3].metric("Dikecualikan", int(counts.get("EXCLUDED", 0)))
+    st.caption("Hanya status SUCCESS yang boleh menjadi BUY. Status lain tetap tercatat beserta alasannya. "
+               f"Diperbarui oleh run {cov['run_id'].iloc[0]}.")
+    st.dataframe(pd.DataFrame({"status": STATUSES, "jumlah": [int(counts.get(s_, 0)) for s_ in STATUSES]}),
+                 hide_index=True)
+    pick = st.multiselect("Filter status", STATUSES, default=[s_ for s_ in STATUSES if s_ != "SUCCESS"])
+    view = cov[cov["status"].isin(pick)]
+    st.dataframe(view, hide_index=True, use_container_width=True)
+    st.download_button("Unduh CSV", view.to_csv(index=False).encode("utf-8"), f"scan_coverage_{d}.csv", "text/csv")
 
 elif page == "Top Swing Stocks":
     st.title(f"Top swing stocks — {last_sig_date or '–'}")

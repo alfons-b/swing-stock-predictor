@@ -41,6 +41,10 @@ def _print_summary(s: dict) -> None:
     print(f"\n{s['date']} | Regime {s['market_regime']} | Data {f['status']} (DB {f['latest_database_date']}, "
           f"ekspektasi {f['latest_expected_market_date']}) | Model {s['model_version']}")
     print(f"Discan {s['universe_scanned']}, tradeable {s['tradeable']} | {s['decision_counts']}")
+    if s.get("coverage"):
+        c = s["coverage"]
+        print(f"Cakupan: {c['processed']}/{c['total_universe']} dianalisis ({c['coverage_pct']}%), "
+              f"layak sinyal {c['signal_eligible']} | {c['status_counts']}")
     print(f"\n{s['headline']}")
     if s["recommendations"]:
         print(f"{'#':>2} {'Ticker':<6} {'Setup':<22} {'Skor':>4} {'P(bull)':>7} {'Entry':>15} {'SL':>8} {'TP1':>8} {'TP2':>8} {'R/R':>5} {'Lot':>5} Decision")
@@ -57,7 +61,17 @@ def cmd_health(cfg, a):
     from app.pipeline.health import format_health, health_check, health_json
     ctx = _ctx(cfg)
     h = health_check(ctx, check_provider=not a.no_provider)
+    if getattr(a, "strict", False) and h["checks"].get("DATABASE", {}).get("status") == "OK":
+        from app.pipeline.health import write_probe
+        st, detail = write_probe(ctx.db)
+        h["checks"]["DATABASE WRITE"] = {"status": st, "detail": detail}
     print(health_json(h) if a.json else format_health(h))
+    if getattr(a, "strict", False):
+        from app.pipeline.health import strict_failures
+        bad = strict_failures(h)
+        if bad:
+            print("STRICT HEALTH FAILED: " + ", ".join(bad))
+            return 3
     return 0 if h["ok"] else 3
 
 
@@ -295,7 +309,9 @@ def build_parser():
     p.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
     p.add_argument("--as-of", default=None, help="simulasikan tanggal (YYYY-MM-DD)")
     sub = p.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("health"); s.add_argument("--json", action="store_true"); s.add_argument("--no-provider", action="store_true"); s.set_defaults(fn=cmd_health)
+    s = sub.add_parser("health"); s.add_argument("--json", action="store_true"); s.add_argument("--no-provider", action="store_true")
+    s.add_argument("--strict", action="store_true", help="exit 3 juga bila DATABASE SIZE / DATABASE PROVIDER = FAIL (workflow Database Health Check)")
+    s.set_defaults(fn=cmd_health)
     s = sub.add_parser("setup"); s.add_argument("--skip-backtest", action="store_true"); s.set_defaults(fn=cmd_setup)
     s = sub.add_parser("daily"); s.add_argument("--skip-ingest", action="store_true"); s.set_defaults(fn=cmd_daily)
     s = sub.add_parser("update-data"); s.add_argument("--actions", action="store_true", help="cek corporate action semua emiten"); s.set_defaults(fn=cmd_update_data)
@@ -312,7 +328,7 @@ def build_parser():
     s.add_argument("--start", default="2017-01-02"); s.add_argument("--end", default="2026-10-02"); s.add_argument("--seed", type=int, default=7)
     s.set_defaults(fn=cmd_make_sample)
     sub.add_parser("db-schema").set_defaults(fn=cmd_db_schema)
-    s = sub.add_parser("db-maintenance", help="retensi data + VACUUM (cegah kuota Supabase terlampaui)")
+    s = sub.add_parser("db-maintenance", help="retensi data + VACUUM (cegah kuota storage database terlampaui)")
     s.add_argument("--dry-run", action="store_true", help="tampilkan yang akan dihapus tanpa menghapus")
     s.add_argument("--full", action="store_true", help="VACUUM FULL: ukuran database benar-benar turun")
     s.set_defaults(fn=cmd_db_maintenance)
