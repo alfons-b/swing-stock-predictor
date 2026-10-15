@@ -393,3 +393,18 @@ class TestSignificanceCalibrationRanking(unittest.TestCase):
         self.assertIn("lolos syarat", txt)
         self.assertIn("TIDAK terbukti > 0", txt)
         self.assertIn("risk_adjusted", txt)
+
+
+class TestSmallUniverse(unittest.TestCase):
+    def test_daily_ic_and_significance_with_few_names(self):
+        """< 20 emiten per tanggal (data contoh): IC tidak dinilai, tetapi tidak boleh error."""
+        from app.challengers.evaluate import block_bootstrap, daily_ic, significance
+        from tests.helpers import make_cfg
+        ev = TestSignificanceCalibrationRanking()._ev(n_days=60, n_names=12)
+        ic = daily_ic(ev, "exp_return", "y_ret")
+        self.assertIsInstance(ic, pd.Series)
+        self.assertTrue(ic.empty)
+        self.assertIsNone(block_bootstrap(ic)["ci_low"])
+        s = significance(ev, make_cfg(), "exp_return", ev["exp_return"].to_numpy())
+        self.assertIsNone(s["ic"]["ci_low"])
+        self.assertIsNotNone(s["topk"]["ci_low"])

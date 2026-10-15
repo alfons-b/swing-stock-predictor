@@ -33,6 +33,8 @@ def daily_ic(df: pd.DataFrame, score: str, target: str = "y_ret", min_names: int
     counts = d.groupby("date").size()
     ok = counts[counts >= min_names].index
     ranked = ranked[ranked["date"].isin(ok)]
+    if ranked.empty:                                   # groupby.apply pada frame kosong → DataFrame, bukan Series
+        return pd.Series(dtype=float)
     return ranked.groupby("date").apply(lambda g: g[score].corr(g[target]), include_groups=False).dropna()
 
 
