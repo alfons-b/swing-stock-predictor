@@ -101,6 +101,13 @@ def research_ready() -> str | None:
                     "**Daily Market Pipeline** sekali (Actions → Run workflow) — migrasi berjalan otomatis — lalu muat ulang.")
     return None
 
+if hasattr(H, "stale_code_warning"):
+    _stale = H.stale_code_warning(H.git_commit())
+else:  # modul helper sendiri masih versi lama (dimuat sebelum update ini) → pasti perlu reboot
+    _stale = "Versi kode baru terdeteksi, tetapi aplikasi masih memakai modul lama. Klik **Manage app → ⋮ → Reboot app**."
+if _stale:
+    st.warning(_stale)
+
 _banner = H.database_banner(c.db)
 if _banner:
     (st.error if _banner[0] == "error" else st.warning)(_banner[1])
@@ -347,7 +354,11 @@ elif page == "Model Lab":
     try:
         t = _table()
     except Exception as e:
-        st.error(f"Tabel challenger belum bisa dibaca ({type(e).__name__}). Jalankan workflow Challenger Train sekali.")
+        if isinstance(e, AttributeError) or _stale:
+            st.error("Modul aplikasi di memori masih versi lama. Klik **Manage app → ⋮ → Reboot app**.")
+        else:
+            st.error(f"Tabel challenger belum bisa dibaca ({type(e).__name__}: {str(e)[:200]}). "
+                     "Bila workflow Challenger Train belum pernah sukses, jalankan sekali.")
         st.stop()
     if t.empty:
         st.info("Belum ada model challenger terlatih. Jalankan Actions → Challenger Train → Run workflow.")
