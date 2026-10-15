@@ -178,6 +178,15 @@ class TestEndToEnd(unittest.TestCase):
             self.assertIn(out["test"].get("status"), ("OK", "INSUFFICIENT_DATA"), (m, out["test"]))
             self.assertTrue(out["verdict"])
             self.assertEqual(repo.latest_challenger(m)["version"], out["version"])
+            # lapisan validasi (kalibrasi + aturan ranking) tersimpan dan dipakai; signifikansi dilaporkan
+            import json
+            params = json.loads(repo.latest_challenger(m)["params"])
+            self.assertIn(params["ranking_rule"], ("prob_bullish", "exp_return", "risk_adjusted", "prob_up"), m)
+            self.assertIn("calibrators", params)
+            if out["test"].get("status") == "OK":
+                self.assertIn("topk", out["significance"], m)
+                self.assertIn("ece_bullish_raw", out["test"])
+                self.assertEqual(out["test"]["ranking_rule"], params["ranking_rule"])
         recent = prepare_dataset(self.cfg, repo, 200, labels=False)
         res = run_predict(list(MODEL_NAMES), recent, self.cfg, repo, "test-predict")
         for m in MODEL_NAMES:
@@ -187,6 +196,7 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(set(f["model_name"]), set(MODEL_NAMES))
         self.assertTrue(((f["prob_bullish"] >= 0) & (f["prob_bullish"] <= 1)).all())
         self.assertTrue((f["q10"] <= f["q90"]).all())
+        self.assertTrue(f["rank_score"].notna().all())
         after = self.ctx.db.query_df("SELECT version, status, artifact FROM model_versions ORDER BY version")
         pd.testing.assert_frame_equal(self.active_before, after)       # model aktif tidak berubah sedikit pun
 

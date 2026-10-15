@@ -290,10 +290,12 @@ def cmd_challenger_train(cfg, a):
             run.stats["summary"] = {k: v for k, v in out.items() if k != "model"}
         t = out["test"]
         print(f"\n{MODEL_LABELS[model]} {out['version']} — test {t.get('eval_start')}..{t.get('eval_end')} (n={t.get('n')})")
-        for k in ("roc_auc_bullish", "log_loss", "ece_bullish", "topk_mean_net_return", "ic_mean", "ic_t", "auc_up",
+        print(f"  {'ranking_rule':<24} {t.get('ranking_rule', 'prob_bullish')} (dipilih di fold validasi)")
+        for k in ("roc_auc_bullish", "auc_up", "log_loss", "log_loss_raw", "ece_bullish", "ece_bullish_raw",
+                  "topk_mean_net_return", "topk_by_rule_net", "topk_by_exp_return_net", "ic_mean", "ic_t",
                   "coverage_80", "vol_rank_corr"):
             v = t.get(k)
-            print(f"  {k:<22} {'n/a' if v is None else (f'{v:+.2%}' if 'return' in k else f'{v:.4f}')}")
+            print(f"  {k:<24} {'n/a' if v is None else (f'{v:+.2%}' if ('return' in k or 'net' in k) else f'{v:.4f}')}")
         for line in out["verdict"]:
             print(f"  - {line}")
     return rc

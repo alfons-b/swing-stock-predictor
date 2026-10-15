@@ -296,3 +296,127 @@ class TestRegistryAndReportPostgres(TestRegistryAndReport):
         got = self.ctx.repo.latest_challenger("arima_garch")
         params, meta = ag.from_artifact(got["artifact"])
         self.assertEqual(params["AAAA"]["ar"], [0.2])
+
+
+class TestSignificanceCalibrationRanking(unittest.TestCase):
+    """Uji signifikansi (bootstrap blok), kalibrasi Platt, dan pemilihan aturan ranking di fold validasi."""
+
+    def test_block_bootstrap_null_and_signal(self):
+        from app.challengers.evaluate import block_bootstrap
+        rng = np.random.default_rng(1)
+        null = block_bootstrap(rng.normal(0, 0.02, 120), block=5, n_boot=2000, seed=0)
+        self.assertLessEqual(null["ci_low"], 0)
+        self.assertGreaterEqual(null["ci_high"], 0)
+        self.assertGreater(null["p_value"], 0.05)
+        sig = block_bootstrap(rng.normal(0.01, 0.02, 120), block=5, n_boot=2000, seed=0)
+        self.assertGreater(sig["ci_low"], 0)
+        self.assertLess(sig["p_value"], 0.01)
+        self.assertEqual(block_bootstrap([0.1, 0.2], 5)["ci_low"], None)        # terlalu pendek → tidak dinilai
+        x = rng.normal(0, 1, 100)
+        self.assertEqual(block_bootstrap(x, 5, 500, seed=3), block_bootstrap(x, 5, 500, seed=3))   # deterministik
+
+    def test_block_bootstrap_is_wider_for_overlapping_returns(self):
+        """Return 5 hari dari tanggal berurutan saling bertumpuk → CI blok harus lebih lebar dari CI per tanggal."""
+        from app.challengers.evaluate import block_bootstrap
+        rng = np.random.default_rng(2)
+        daily = rng.normal(0, 0.02, 600)
+        overlapping = np.convolve(daily, np.ones(5), mode="valid")[:400]
+        w_block = block_bootstrap(overlapping, 5, 2000, 0)
+        w_iid = block_bootstrap(overlapping, 1, 2000, 0)
+        self.assertGreater(w_block["ci_high"] - w_block["ci_low"], 1.3 * (w_iid["ci_high"] - w_iid["ci_low"]))
+
+    def _ev(self, n_days=120, n_names=40, seed=0):
+        rng = np.random.default_rng(seed)
+        dates = np.repeat(pd.bdate_range("2026-01-01", periods=n_days), n_names)
+        vol = np.tile(np.linspace(0.02, 0.15, n_names), n_days)            # saham makin volatil
+        alpha = rng.normal(0, 0.01, len(dates))
+        y = alpha - 0.4 * vol + rng.normal(0, 1, len(dates)) * vol         # yang volatil justru jatuh (pasar turun)
+        from scipy.stats import norm
+        mu = alpha - 0.4 * vol
+        ev = pd.DataFrame({"date": dates, "ticker": np.tile([f"T{i}" for i in range(n_names)], n_days),
+                           "is_tradeable": True, "y_ret": y,
+                           "y_class": np.where(y > 0.03, 2, np.where(y < -0.03, 0, 1)).astype(float),
+                           "exp_return": mu, "vol": vol, "prob_up": 1 - norm.cdf(-mu / vol),
+                           "prob_bullish": 1 - norm.cdf((0.03 - mu) / vol), "prob_bearish": norm.cdf((-0.03 - mu) / vol)})
+        ev["prob_neutral"] = 1 - ev["prob_bullish"] - ev["prob_bearish"]
+        return ev
+
+    def test_ranking_rule_avoids_volatility_bias(self):
+        from app.challengers.evaluate import choose_ranking
+        from tests.helpers import make_cfg
+        rule, scores = choose_ranking(self._ev(), make_cfg())
+        self.assertNotEqual(rule, "prob_bullish")                          # P(>3%) memilih saham paling volatil
+        self.assertGreater(scores[rule], scores["prob_bullish"])
+        self.assertEqual(set(scores), {"prob_bullish", "exp_return", "risk_adjusted", "prob_up"})
+
+    def test_paired_significance_vs_baselines(self):
+        from app.challengers.evaluate import significance
+        from tests.helpers import make_cfg
+        ev = self._ev()
+        ev["rank"] = ev["exp_return"]
+        noise = np.random.default_rng(9).normal(size=len(ev))               # baseline tanpa informasi
+        s = significance(ev, make_cfg(), "rank", noise)
+        self.assertGreater(s["topk_vs_momentum"]["ci_low"], 0)
+        self.assertIn("p_value", s["ic"])
+
+    def test_platt_fixes_overconfidence_without_changing_order(self):
+        from sklearn.metrics import roc_auc_score
+        from app.challengers.calibration import apply_platt, calibrate_forecasts, fit_calibrators
+        from app.models.evaluation import expected_calibration_error
+        rng = np.random.default_rng(4)
+        z = rng.normal(-1.0, 1.0, 20000)
+        y = (rng.uniform(size=z.size) < 1 / (1 + np.exp(-z))).astype(int)
+        p_over = 1 / (1 + np.exp(-2.5 * z))                                # terlalu yakin
+        fc = {"prob_bullish": p_over, "prob_bearish": np.full(z.size, 0.2), "prob_up": p_over}
+        y_ret = np.where(y == 1, 0.05, 0.0)
+        cal = fit_calibrators(fc, y_ret, 0.03, -0.03)
+        self.assertIn("prob_bullish", cal)
+        p_cal = apply_platt(p_over, cal["prob_bullish"])
+        self.assertLess(expected_calibration_error(y, p_cal), 0.5 * expected_calibration_error(y, p_over))
+        self.assertAlmostEqual(roc_auc_score(y, p_cal), roc_auc_score(y, p_over), places=5)   # monoton (seri di batas klip)
+        out = calibrate_forecasts({**fc, "prob_bearish": np.full(z.size, 0.9)}, cal)
+        self.assertTrue(np.all(out["prob_bullish"] + out["prob_bearish"] <= 1.0 + 1e-9))
+        self.assertTrue(np.all(out["prob_neutral"] >= 0))
+
+    def test_verdict_uses_significance_words(self):
+        from app.challengers.evaluate import verdict
+        m = {"status": "OK", "roc_auc_bullish": 0.6, "auc_up": 0.55, "ece_bullish": 0.05, "ece_bullish_raw": 0.1,
+             "ranking_rule": "risk_adjusted", "topk_by_rule_net": 0.004, "topk_mean_net_return": 0.002}
+        sig = {"topk": {"mean": 0.004, "ci_low": -0.003, "ci_high": 0.011, "p_value": 0.3},
+               "topk_vs_reversal": {"mean": 0.02, "ci_low": 0.005, "ci_high": 0.03, "p_value": 0.01},
+               "topk_vs_momentum": {"mean": 0.001, "ci_low": -0.01, "ci_high": 0.012, "p_value": 0.8}}
+        txt = " | ".join(verdict(m, {"reversal": {"topk_mean_net_return": -0.02}, "momentum": {"topk_mean_net_return": 0.0}},
+                                 {"version": "model_v001", "topk_mean_net_return": 0.011, "roc_auc_bullish": 0.58,
+                                  "comparison": "di dalam CI 95% challenger — perbedaan tidak signifikan"}, sig))
+        self.assertIn("lebih baik secara SIGNIFIKAN", txt)
+        self.assertIn("perbedaan TIDAK signifikan", txt)
+        self.assertIn("lolos syarat", txt)
+        self.assertIn("TIDAK terbukti > 0", txt)
+        self.assertIn("risk_adjusted", txt)
+
+
+class TestSmallUniverse(unittest.TestCase):
+    def test_daily_ic_and_significance_with_few_names(self):
+        """< 20 emiten per tanggal (data contoh): IC tidak dinilai, tetapi tidak boleh error."""
+        from app.challengers.evaluate import block_bootstrap, daily_ic, significance
+        from tests.helpers import make_cfg
+        ev = TestSignificanceCalibrationRanking()._ev(n_days=60, n_names=12)
+        ic = daily_ic(ev, "exp_return", "y_ret")
+        self.assertIsInstance(ic, pd.Series)
+        self.assertTrue(ic.empty)
+        self.assertIsNone(block_bootstrap(ic)["ci_low"])
+        s = significance(ev, make_cfg(), "exp_return", ev["exp_return"].to_numpy())
+        self.assertIsNone(s["ic"]["ci_low"])
+        self.assertIsNotNone(s["topk"]["ci_low"])
+
+    def test_verdict_never_fails_on_missing_values(self):
+        from app.challengers.evaluate import verdict
+        m = {"status": "OK", "roc_auc_bullish": 0.55, "auc_up": None, "ece_bullish": None, "ece_bullish_raw": None,
+             "ranking_rule": "exp_return", "topk_by_rule_net": None, "topk_mean_net_return": -0.01}
+        sig = {"topk": {"mean": None, "ci_low": None, "ci_high": None, "p_value": None},
+               "ic": {"mean": None, "ci_low": None, "ci_high": None, "p_value": None},
+               "topk_vs_momentum": {"mean": 0.001, "ci_low": -0.01, "ci_high": 0.01, "p_value": None}}
+        out = verdict(m, {"momentum": {"topk_mean_net_return": None}, "reversal": {"topk_mean_net_return": -0.02}},
+                      {"version": "v", "topk_mean_net_return": 0.01, "roc_auc_bullish": None}, sig)
+        self.assertTrue(out)
+        self.assertTrue(any("n/a" in x for x in out))

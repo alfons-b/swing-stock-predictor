@@ -224,7 +224,7 @@ class Repository:
         d = df.assign(stock_id=df["ticker"].map(ids))
         d = d[d["stock_id"].notna()]
         cols = ["forecast_date", "stock_id", "ticker", "model_name", "model_version", "horizon", "exp_return", "prob_up",
-                "prob_bullish", "prob_bearish", "vol", "q10", "q50", "q90", "run_id", "created_at"]
+                "prob_bullish", "prob_bearish", "vol", "q10", "q50", "q90", "rank_score", "run_id", "created_at"]
         return self.db.upsert("model_forecasts", d.reindex(columns=cols), keys=["forecast_date", "stock_id", "model_name"],
                               count=False)
 
@@ -238,7 +238,7 @@ class Repository:
         if model_name:
             where.append("model_name = ?"); params.append(model_name)
         sql = "SELECT forecast_date, ticker, model_name, model_version, horizon, exp_return, prob_up, prob_bullish, " \
-              "prob_bearish, vol, q10, q50, q90 FROM model_forecasts" + (" WHERE " + " AND ".join(where) if where else "")
+              "prob_bearish, vol, q10, q50, q90, rank_score FROM model_forecasts" + (" WHERE " + " AND ".join(where) if where else "")
         return self.db.query_df(sql + " ORDER BY forecast_date, model_name, ticker", params, parse_dates=["forecast_date"])
 
     # ================================================================ predictions

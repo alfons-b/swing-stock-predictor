@@ -8,8 +8,8 @@ import pandas as pd
 
 from app.challengers import MODEL_LABELS, MODEL_NAMES
 
-COLUMNS = ["model", "versi", "periode test", "n", "AUC bullish", "log loss", "ECE", "top-k net", "IC harian", "IC t",
-           "AUC naik", "cakupan 80%"]
+COLUMNS = ["model", "versi", "periode test", "n", "AUC bullish", "AUC naik", "log loss", "ECE", "ECE mentah", "top-k net",
+           "aturan ranking", "top-k aturan", "CI95 top-k aturan", "p top-k aturan", "IC harian", "IC t", "cakupan 80%"]
 
 
 def _j(v):
@@ -33,11 +33,16 @@ def comparison_table(repo) -> pd.DataFrame:
         m = _j(r["metrics"])
         t = m.get("test", {})
         base = base or m.get("baselines", {})
+        sk = (m.get("significance") or {}).get("topk") or {}
+        ci = f"{sk['ci_low']:+.2%} … {sk['ci_high']:+.2%}" if sk.get("ci_low") is not None else None
         active = active or m.get("active_model")
         rows.append({"model": MODEL_LABELS[name], "versi": r["version"],
                      "periode test": f"{t.get('eval_start')}..{t.get('eval_end')}", "n": t.get("n"),
                      "AUC bullish": t.get("roc_auc_bullish"), "log loss": t.get("log_loss"), "ECE": t.get("ece_bullish"),
-                     "top-k net": t.get("topk_mean_net_return"), "IC harian": t.get("ic_mean"), "IC t": t.get("ic_t"),
+                     "ECE mentah": t.get("ece_bullish_raw"), "top-k net": t.get("topk_mean_net_return"),
+                     "aturan ranking": t.get("ranking_rule"), "top-k aturan": t.get("topk_by_rule_net"),
+                     "CI95 top-k aturan": ci, "p top-k aturan": sk.get("p_value"),
+                     "IC harian": t.get("ic_mean"), "IC t": t.get("ic_t"),
                      "AUC naik": t.get("auc_up"), "cakupan 80%": t.get("coverage_80")})
     if active:
         rows.append({"model": f"Model aktif ({active.get('version')})", "versi": "—",
