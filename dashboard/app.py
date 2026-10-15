@@ -364,11 +364,13 @@ elif page == "Model Lab":
         st.info("Belum ada model challenger terlatih. Jalankan Actions → Challenger Train → Run workflow.")
         st.stop()
     st.subheader("Perbandingan out-of-sample")
-    st.dataframe(t.style.format({c_: "{:.3f}" for c_ in ("AUC bullish", "log loss", "ECE", "IC harian", "IC t", "AUC naik",
-                                                        "cakupan 80%")} | {"top-k net": "{:+.2%}"}, na_rep="–"),
+    st.dataframe(t.style.format({c_: "{:.3f}" for c_ in ("AUC bullish", "log loss", "ECE", "ECE mentah", "IC harian", "IC t",
+                                                        "AUC naik", "cakupan 80%", "p top-k aturan")}
+                                | {"top-k net": "{:+.2%}", "top-k aturan": "{:+.2%}"}, na_rep="–"),
                  hide_index=True, use_container_width=True)
-    st.caption("top-k net = rata-rata return 5 hari top-5 saham per hari setelah biaya round-trip (definisi model aktif). "
-               "IC harian = korelasi peringkat prakiraan vs return aktual antar-emiten. Cakupan 80% ideal ≈ 0,80.")
+    st.caption("top-k net = rata-rata return 5 hari top-5 saham per hari (urut P(bullish), definisi model aktif) setelah biaya. "
+               "Aturan ranking & kalibrasi dipilih di fold VALIDASI, lalu dilaporkan di test. CI95/p dari bootstrap blok "
+               "5 hari per tanggal: bila CI memuat 0, hasil belum terbukti. ECE ≤ 0,06 = syarat kalibrasi. Cakupan 80% ideal ≈ 0,80.")
     reg = q("SELECT model_name, version, created_at, metrics FROM challenger_models ORDER BY created_at DESC")
     for name in reg["model_name"].unique():
         r = reg[reg["model_name"] == name].iloc[0]
@@ -382,10 +384,16 @@ elif page == "Model Lab":
     if d:
         d = str(d)[:10]
         st.subheader(f"Prakiraan terbaru — {d}")
-        f = q("SELECT ticker, model_name, exp_return, prob_up, prob_bullish, prob_bearish, vol, q10, q90 "
-              "FROM model_forecasts WHERE forecast_date = ?", (d,))
+        try:
+            f = q("SELECT ticker, model_name, rank_score, exp_return, prob_up, prob_bullish, prob_bearish, vol, q10, q90 "
+                  "FROM model_forecasts WHERE forecast_date = ?", (d,))
+        except Exception:  # kolom rank_score belum dimigrasi (workflow berikutnya menambahkannya)
+            f = q("SELECT ticker, model_name, exp_return, prob_up, prob_bullish, prob_bearish, vol, q10, q90 "
+                  "FROM model_forecasts WHERE forecast_date = ?", (d,))
         mdl = st.selectbox("Model", sorted(f["model_name"].unique()), format_func=lambda x: MODEL_LABELS.get(x, x))
-        top = f[f["model_name"] == mdl].sort_values("prob_bullish", ascending=False).head(25)
+        sort_col = "rank_score" if "rank_score" in f and f.loc[f["model_name"] == mdl, "rank_score"].notna().any() else "prob_bullish"
+        top = f[f["model_name"] == mdl].sort_values(sort_col, ascending=False).head(25)
+        st.caption(f"Diurutkan berdasarkan {'aturan ranking terpilih model (rank_score)' if sort_col == 'rank_score' else 'P(bullish)'}.")
         st.dataframe(top.drop(columns=["model_name"]), hide_index=True, use_container_width=True)
         tk = st.selectbox("Bandingkan semua model untuk satu saham", sorted(f["ticker"].unique()))
         cmp_ = f[f["ticker"] == tk].assign(model=lambda x: x["model_name"].map(MODEL_LABELS))

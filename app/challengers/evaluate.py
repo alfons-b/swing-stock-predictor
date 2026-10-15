@@ -107,27 +107,148 @@ def baseline_metrics(ev: pd.DataFrame, cfg: dict, feature_values: np.ndarray | N
     return out
 
 
-def verdict(metrics: dict, baselines: dict, active: dict | None) -> list[str]:
-    """Kalimat jujur: apakah challenger mengungguli pembanding pada periode test yang sama."""
+def _ci(b: dict | None, pct: bool = True) -> str:
+    if not b or b.get("ci_low") is None:
+        return ""
+    f = (lambda v: f"{v:+.2%}") if pct else (lambda v: f"{v:+.3f}")
+    return f" [CI95 {f(b['ci_low'])}; {f(b['ci_high'])}, p={b['p_value']:.3f}]"
+
+
+def verdict(metrics: dict, baselines: dict, active: dict | None, sig: dict | None = None) -> list[str]:
+    """Kalimat jujur. 'Lebih baik' hanya disebut SIGNIFIKAN bila CI 95% selisih harian berpasangan tidak memuat 0."""
     if metrics.get("status") != "OK":
         return ["Data evaluasi tidak cukup."]
+    sig = sig or {}
     msgs = []
-    tk = metrics.get("topk_mean_net_return")
     auc = metrics.get("roc_auc_bullish")
     if auc is not None:
-        msgs.append(f"AUC bullish {auc:.3f} ({'di atas' if auc > 0.52 else 'TIDAK di atas'} ambang promosi 0,52)")
+        msgs.append(f"AUC bullish {auc:.3f} ({'di atas' if auc > 0.52 else 'TIDAK di atas'} ambang promosi 0,52); "
+                    f"AUC arah naik {metrics.get('auc_up') or float('nan'):.3f}")
+    ece, ece_raw = metrics.get("ece_bullish"), metrics.get("ece_bullish_raw")
+    if ece is not None:
+        msgs.append(f"ECE {ece:.3f}" + (f" (sebelum kalibrasi {ece_raw:.3f})" if ece_raw is not None and ece_raw != ece else "")
+                    + f" → {'lolos' if ece <= 0.06 else 'TIDAK lolos'} syarat ≤ 0,06")
+    rule = metrics.get("ranking_rule", "prob_bullish")
+    tk_rule = metrics.get("topk_by_rule_net", metrics.get("topk_mean_net_return"))
+    if tk_rule is not None:
+        msgs.append(f"Aturan ranking (dipilih di validasi): {rule} → top-k net {tk_rule:+.2%}{_ci(sig.get('topk'))}")
+    if sig.get("ic"):
+        msgs.append(f"IC harian {sig['ic']['mean']:+.3f}{_ci(sig['ic'], pct=False)}")
     for name in ("momentum", "reversal"):
+        d = sig.get(f"topk_vs_{name}")
         b = (baselines or {}).get(name, {})
-        if b.get("topk_mean_net_return") is not None and tk is not None:
-            better = tk > b["topk_mean_net_return"]
-            msgs.append(f"top-k net {tk:+.2%} vs baseline {name} {b['topk_mean_net_return']:+.2%} "
-                        f"→ {'lebih baik' if better else 'TIDAK lebih baik'}")
+        if d and d.get("ci_low") is not None:
+            if d["ci_low"] > 0:
+                word = "lebih baik secara SIGNIFIKAN"
+            elif d["ci_high"] < 0:
+                word = "lebih BURUK secara signifikan"
+            else:
+                word = "perbedaan TIDAK signifikan"
+            msgs.append(f"vs baseline {name} ({b.get('topk_mean_net_return', float('nan')):+.2%}): selisih harian "
+                        f"{d['mean']:+.2%}{_ci(d)} → {word}")
+        elif b.get("topk_mean_net_return") is not None and tk_rule is not None:
+            msgs.append(f"vs baseline {name}: {tk_rule:+.2%} vs {b['topk_mean_net_return']:+.2%} (signifikansi tidak tersedia)")
     if active:
         a_tk, a_auc = active.get("topk_mean_net_return"), active.get("roc_auc_bullish")
-        if a_tk is not None and tk is not None:
+        tk_pb = metrics.get("topk_mean_net_return")
+        if a_tk is not None and tk_pb is not None:
             auc_txt = f", AUC {auc:.3f} vs {a_auc:.3f}" if auc is not None and a_auc is not None else ""
-            msgs.append(f"vs model aktif ({active.get('version')}): top-k net {tk:+.2%} vs {a_tk:+.2%}{auc_txt} "
-                        f"(periode test model aktif {active.get('eval_start')}..{active.get('eval_end')})")
-    if tk is not None and tk <= 0:
-        msgs.append("Top-k net return ≤ 0 setelah biaya: tidak layak dipakai untuk keputusan transaksi.")
+            msgs.append(f"vs model aktif ({active.get('version')}), definisi sama (top-k P(bullish)): {tk_pb:+.2%} vs "
+                        f"{a_tk:+.2%}{auc_txt} → {active.get('comparison', 'tidak bisa dinilai')} "
+                        f"(perbandingan kasar: prediksi test model aktif tidak tersedia untuk uji berpasangan)")
+    t = sig.get("topk") or {}
+    if t.get("ci_low") is not None and t["ci_low"] > 0:
+        msgs.append("Top-k net > 0 secara signifikan setelah biaya pada periode test (satu periode — belum bukti cukup).")
+    elif tk_rule is not None:
+        msgs.append("Top-k net setelah biaya TIDAK terbukti > 0 secara signifikan: belum layak untuk keputusan transaksi.")
     return msgs
+
+
+# ============================================================================== signifikansi (bootstrap blok per tanggal)
+def daily_topk(df: pd.DataFrame, score: str, ret: str, k: int, cost: float) -> pd.Series:
+    """Rata-rata return bersih top-k per tanggal (seri harian; dasar `topk_mean_net_return`)."""
+    d = df[["date", score, ret]].dropna()
+    top = d.sort_values(score, ascending=False).groupby("date").head(k)
+    return (top[ret] - cost).groupby(top["date"]).mean().sort_index()
+
+
+def block_bootstrap(series, block: int = 5, n_boot: int = 2000, seed: int = 0) -> dict:
+    """Moving-block bootstrap atas seri harian. Blok = horizon label, karena return H hari dari tanggal berdekatan
+    saling bertumpuk (resampling per tanggal tunggal akan terlalu optimistis).
+    Return: rata-rata, CI 95%, p-value dua sisi untuk H0: rata-rata = 0."""
+    x = np.asarray(pd.Series(series).dropna(), float)
+    n = len(x)
+    if n < max(10, 2 * block):
+        return {"mean": float(x.mean()) if n else None, "ci_low": None, "ci_high": None, "p_value": None, "n_days": int(n)}
+    rng = np.random.default_rng(seed)
+    b = max(1, min(block, n // 2))
+    n_blocks = int(np.ceil(n / b))
+    starts = rng.integers(0, n - b + 1, size=(n_boot, n_blocks))
+    idx = (starts[:, :, None] + np.arange(b)[None, None, :]).reshape(n_boot, -1)[:, :n]
+    means = x[idx].mean(axis=1)
+    centered = means - x.mean()                                         # distribusi di bawah H0 (digeser ke 0)
+    p = float(np.mean(np.abs(centered) >= abs(x.mean())))
+    return {"mean": float(x.mean()), "ci_low": float(np.quantile(means, 0.025)), "ci_high": float(np.quantile(means, 0.975)),
+            "p_value": max(p, 1.0 / n_boot), "n_days": int(n)}
+
+
+def significance(ev: pd.DataFrame, cfg: dict, score: str, baseline_values: np.ndarray | None = None,
+                 n_boot: int = 2000, seed: int = 0) -> dict:
+    """Uji untuk top-k net (skor `score`) dan IC harian: terhadap nol dan PASANGAN harian vs baseline pada baris sama."""
+    h = int(get(cfg, "labels.SWING_HORIZON", 5))
+    k = int(get(cfg, "model.comparison_top_k", 5))
+    cost = round_trip_cost(cfg)
+    p = ev[ev["y_class"].notna() & ev["is_tradeable"].astype(bool)].copy()
+    if len(p) < 50:
+        return {}
+    model_topk = daily_topk(p, score, "y_ret", k, cost)
+    out = {"block_days": h, "n_boot": n_boot,
+           "topk": block_bootstrap(model_topk, h, n_boot, seed),
+           "ic": block_bootstrap(daily_ic(p, "exp_return"), h, n_boot, seed)}
+    if baseline_values is not None:
+        p["mom"] = np.asarray(baseline_values, float)[ev.index.get_indexer(p.index)]
+        p["rev"] = -p["mom"]
+        for name, col in (("momentum", "mom"), ("reversal", "rev")):
+            diff = (model_topk - daily_topk(p, col, "y_ret", k, cost)).dropna()
+            out[f"topk_vs_{name}"] = block_bootstrap(diff, h, n_boot, seed)
+    return out
+
+
+def compare_to_value(boot: dict, value) -> str:
+    """Bandingkan CI challenger dengan angka TITIK model aktif (prediksi test model aktif tidak tersedia untuk uji
+    berpasangan — perbandingan ini kasar)."""
+    if not boot or boot.get("ci_low") is None or value is None:
+        return "tidak bisa dinilai"
+    if value > boot["ci_high"]:
+        return "model aktif lebih tinggi dari CI 95% challenger"
+    if value < boot["ci_low"]:
+        return "model aktif lebih rendah dari CI 95% challenger"
+    return "di dalam CI 95% challenger — perbedaan tidak signifikan"
+
+
+# ============================================================================== aturan ranking (dipilih di fold validasi)
+RANK_RULES = ("prob_bullish", "exp_return", "risk_adjusted", "prob_up")
+
+
+def rank_score(fc: dict | pd.DataFrame, rule: str) -> np.ndarray:
+    """Skor untuk mengurutkan saham. risk_adjusted = ekspektasi return / σ (tidak bias ke saham paling volatil)."""
+    get_ = (lambda c: np.asarray(fc[c], float))
+    if rule == "risk_adjusted":
+        return get_("exp_return") / np.maximum(get_("vol"), 1e-6)
+    if rule not in RANK_RULES:
+        raise ValueError(f"aturan ranking tidak dikenal: {rule}")
+    return get_(rule)
+
+
+def choose_ranking(ev_val: pd.DataFrame, cfg: dict) -> tuple[str, dict]:
+    """Pilih aturan dengan top-k net tertinggi di FOLD VALIDASI (test tidak dilihat). Seri: urutan RANK_RULES."""
+    k = int(get(cfg, "model.comparison_top_k", 5))
+    cost = round_trip_cost(cfg)
+    p = ev_val[ev_val["y_class"].notna() & ev_val["is_tradeable"].astype(bool)].copy()
+    scores = {}
+    for rule in RANK_RULES:
+        p["_s"] = rank_score(p, rule)
+        s = daily_topk(p, "_s", "y_ret", k, cost)
+        scores[rule] = float(s.mean()) if len(s) else float("-inf")
+    best = max(RANK_RULES, key=lambda r: (scores[r], -RANK_RULES.index(r)))
+    return best, scores

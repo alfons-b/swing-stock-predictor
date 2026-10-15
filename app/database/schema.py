@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from app.database.db import Database
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 TYPES = {
     "sqlite": {"ID": "INTEGER PRIMARY KEY AUTOINCREMENT", "TEXT": "TEXT", "INT": "INTEGER", "REAL": "REAL",
@@ -164,7 +164,8 @@ TABLES = [
                          ("ticker", "TEXT", "NOT NULL"), ("model_name", "TEXT", "NOT NULL"), ("model_version", "TEXT", ""),
                          ("horizon", "INT", ""), ("exp_return", "REAL", ""), ("prob_up", "REAL", ""),
                          ("prob_bullish", "REAL", ""), ("prob_bearish", "REAL", ""), ("vol", "REAL", ""),
-                         ("q10", "REAL", ""), ("q50", "REAL", ""), ("q90", "REAL", ""), ("run_id", "TEXT", ""),
+                         ("q10", "REAL", ""), ("q50", "REAL", ""), ("q90", "REAL", ""), ("rank_score", "REAL", ""),
+                         ("run_id", "TEXT", ""),
                          ("created_at", "TS", "")],
      [["forecast_date", "stock_id", "model_name"]], [["forecast_date"], ["model_name", "forecast_date"]]),
     ("schema_migrations", [("version", "INT", "PRIMARY KEY"), ("applied_at", "TS", "")], [], []),

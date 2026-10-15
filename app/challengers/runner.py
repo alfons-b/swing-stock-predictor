@@ -18,7 +18,11 @@ import pandas as pd
 from app.challengers import MODEL_LABELS, SEQUENCE_MODELS, challenger_cfg
 from app.challengers import data as cd
 from app.challengers.dist import normal_quantiles, summarize_quantiles
-from app.challengers.evaluate import baseline_metrics, evaluate_forecasts, to_eval_frame, verdict
+from app.challengers.calibration import calibrate_forecasts, fit_calibrators
+from app.challengers.evaluate import (baseline_metrics, choose_ranking, compare_to_value, evaluate_forecasts, rank_score,
+                                      significance, to_eval_frame, verdict)
+from app.models.evaluation import topk_trading_proxy
+from app.models.trainer import round_trip_cost
 from app.config import get
 from app.database.repository import now_utc
 from app.utils.logging_utils import get_logger
@@ -82,14 +86,45 @@ def _baseline_values(panel, cc) -> np.ndarray | None:
     return None
 
 
-def _evaluate(panel, rows, q_log, cc, cfg, repo) -> dict:
+def _validation_layer(panel, rows, q_log, cc, cfg) -> dict:
+    """Kalibrator & aturan ranking dari prakiraan FOLD VALIDASI (test tidak dilihat)."""
     fc = summarize_quantiles(q_log, cc["quantiles"], cc["bull_threshold"], cc["bear_threshold"])
     ev = to_eval_frame(panel, rows, fc)
+    mask = (ev["y_class"].notna() & ev["is_tradeable"].astype(bool)).to_numpy()
+    calib = fit_calibrators(fc, ev["y_ret"].to_numpy(), cc["bull_threshold"], cc["bear_threshold"], mask)
+    rule, scores = choose_ranking(to_eval_frame(panel, rows, calibrate_forecasts(fc, calib)), cfg)
+    log.info("Lapisan validasi: kalibrasi %s, aturan ranking %s (top-k net validasi %s)", sorted(calib), rule,
+             {k: round(v, 4) for k, v in scores.items()})
+    return {"calibrators": calib, "ranking_rule": rule, "ranking_validation": scores, "n_validation": int(mask.sum())}
+
+
+def _evaluate(panel, rows, q_log, cc, cfg, repo, layer: dict | None = None) -> dict:
+    layer = layer or {}
+    fc_raw = summarize_quantiles(q_log, cc["quantiles"], cc["bull_threshold"], cc["bear_threshold"])
+    fc = calibrate_forecasts(fc_raw, layer.get("calibrators"))
+    ev = to_eval_frame(panel, rows, fc)
     m = evaluate_forecasts(ev, cfg)
+    raw = evaluate_forecasts(to_eval_frame(panel, rows, fc_raw), cfg)
+    m["ece_bullish_raw"], m["log_loss_raw"] = raw.get("ece_bullish"), raw.get("log_loss")
+    rule = layer.get("ranking_rule", "prob_bullish")
+    ev["rank_score"] = rank_score(ev, rule)
+    p = ev[ev["y_class"].notna() & ev["is_tradeable"].astype(bool)]
+    m["ranking_rule"] = rule
+    if len(p):
+        m["topk_by_rule_net"] = topk_trading_proxy(p.assign(y_ret_h=p["y_ret"]), "rank_score", "y_ret_h",
+                                                   int(get(cfg, "model.comparison_top_k", 5)), round_trip_cost(cfg))["topk_mean_net_return"]
     base_vals = _baseline_values(panel, cc)
-    base = baseline_metrics(ev, cfg, base_vals[rows] if base_vals is not None else None)
+    bv = base_vals[rows] if base_vals is not None else None
+    base = baseline_metrics(ev, cfg, bv)
+    sig = significance(ev, cfg, "rank_score", bv)                       # aturan terpilih (utama)
+    sig_pb = significance(ev.assign(_pb=ev["prob_bullish"]), cfg, "_pb")   # definisi model aktif (untuk pembanding)
+    if sig_pb:
+        sig["topk_prob_bullish"] = sig_pb["topk"]
     ref = active_model_reference(repo)
-    return {"test": m, "baselines": base, "active_model": ref, "verdict": verdict(m, base, ref)}
+    if ref:
+        ref["comparison"] = compare_to_value(sig.get("topk_prob_bullish"), ref.get("topk_mean_net_return"))
+    return {"test": m, "baselines": base, "active_model": ref, "significance": sig, "validation_layer": layer,
+            "verdict": verdict(m, base, ref, sig)}
 
 
 # ============================================================================== training
@@ -124,6 +159,8 @@ def train_sequence(model: str, df: pd.DataFrame, cfg: dict, repo) -> tuple[dict,
     val = T.finite_target_ends(model, panel, cd.eligible_ends(panel, L, *plan.select_eval, min_history=min_hist))
     model_a, info_a = T.fit_sequence_model(spec_a, panel, Z, tr_a, tr, seed, val_ends=val)
     best_epochs = max(int(tr.get("min_epochs", 2)), info_a["best_epoch"])
+    val_rows = T.finite_target_ends(model, panel, cd.eligible_ends(panel, L, *plan.select_eval, min_history=min_hist))
+    layer = _validation_layer(panel, val_rows, T.predict_quantiles(model_a, spec_a, panel, Z, val_rows), cc, cfg)
     timings["select_s"] = round(time.time() - t0, 1)
     # B. evaluasi tersegel pada fold test
     t0 = time.time()
@@ -135,7 +172,7 @@ def train_sequence(model: str, df: pd.DataFrame, cfg: dict, repo) -> tuple[dict,
         Z = cd.apply_scaler(panel.X, spec_a.center, spec_a.scale, spec_a.clip_z)
     test_rows = cd.eligible_ends(panel, L, *plan.test_eval, min_history=min_hist)
     q_log = T.predict_quantiles(model_b, spec_b, panel, Z, test_rows)
-    evaluation = _evaluate(panel, test_rows, q_log, cc, cfg, repo)
+    evaluation = _evaluate(panel, test_rows, q_log, cc, cfg, repo, layer)
     timings["test_s"] = round(time.time() - t0, 1)
     # C. produksi
     t0 = time.time()
@@ -149,7 +186,8 @@ def train_sequence(model: str, df: pd.DataFrame, cfg: dict, repo) -> tuple[dict,
     artifact = T.save_artifact(model_c, spec_c)
     params = {"features": feats, "seq_len": L, "horizon": h, "quantiles": cc["quantiles"], "arch": cc["arch"],
               "training": tr, "n_parameters": int(sum(p.numel() for p in model_c.parameters())),
-              "best_epochs": best_epochs, "artifact_bytes": len(artifact)}
+              "best_epochs": best_epochs, "artifact_bytes": len(artifact),
+              "calibrators": layer["calibrators"], "ranking_rule": layer["ranking_rule"]}
     metrics = {**evaluation, "selection": {k: v for k, v in info_a.items()}, "test_fit": {k: v for k, v in info_b.items() if k != "history"},
                "production_fit": {k: v for k, v in info_c.items() if k != "history"}, "timings": timings}
     dates = {"train_start": plan.train_start, "train_end": last_label, "eval_start": plan.test_eval[0], "eval_end": plan.test_eval[1]}
@@ -212,6 +250,14 @@ def train_arima_garch(df: pd.DataFrame, cfg: dict, repo) -> tuple[dict, dict, by
     plan = cd.split_plan(df["date"], cfg)
     panel = cd.prepare_panel(df, ["c_ret1", "c_ret5"], h, cc["target_clip"])
     timings = {}
+    # A. lapisan validasi: estimasi dari data ≤ akhir training validasi, parameter tetap selama fold validasi
+    t0 = time.time()
+    rets = {t: r[-window:] for t, r in _returns_by_stock(panel, plan.select_train_end).items()}
+    params_val = fit_all(rets, orders, garch_cfg, min_obs, n_jobs)
+    val_rows = cd.eligible_ends(panel, 1, *plan.select_eval, min_history=cc["min_history_days"])
+    vrows, vmu, vsd = _arima_forecast_rows(panel, params_val, val_rows, h)
+    layer = _validation_layer(panel, vrows, normal_quantiles(vmu, vsd, cc["quantiles"]), cc, cfg)
+    timings["validation_s"] = round(time.time() - t0, 1)
     # B. evaluasi tersegel: estimasi dari data ≤ akhir training test, parameter tetap selama periode test
     t0 = time.time()
     rets = {t: r[-window:] for t, r in _returns_by_stock(panel, plan.test_train_end).items()}
@@ -219,7 +265,7 @@ def train_arima_garch(df: pd.DataFrame, cfg: dict, repo) -> tuple[dict, dict, by
     test_rows = cd.eligible_ends(panel, 1, *plan.test_eval, min_history=cc["min_history_days"])
     rows, mu, sd = _arima_forecast_rows(panel, params_test, test_rows, h)
     q_log = normal_quantiles(mu, sd, cc["quantiles"])
-    evaluation = _evaluate(panel, rows, q_log, cc, cfg, repo)
+    evaluation = _evaluate(panel, rows, q_log, cc, cfg, repo, layer)
     timings["test_s"] = round(time.time() - t0, 1)
     # C. produksi: estimasi ulang pada window terakhir
     t0 = time.time()
@@ -233,7 +279,8 @@ def train_arima_garch(df: pd.DataFrame, cfg: dict, repo) -> tuple[dict, dict, by
                "median_persistence": float(np.median([p["alpha"] + p["beta"] for p in ok if "alpha" in p])) if ok else None}
     artifact = to_artifact(params_prod, {"horizon": h, "window": window, "fitted_at": now_utc()})
     params = {"window": window, "orders": orders, "garch": garch_cfg, "horizon": h, "quantiles": cc["quantiles"],
-              "fit_summary": summary, "artifact_bytes": len(artifact)}
+              "fit_summary": summary, "artifact_bytes": len(artifact),
+              "calibrators": layer["calibrators"], "ranking_rule": layer["ranking_rule"]}
     metrics = {**evaluation, "timings": timings,
                "test_fit": {"stocks_fitted": sum(p.get("status") == "OK" for p in params_test.values())}}
     dates = {"train_start": plan.train_start, "train_end": pd.Timestamp(panel.dates.max()),
@@ -261,6 +308,7 @@ def run_train(model: str, df: pd.DataFrame, cfg: dict, repo, run_id: str) -> dic
              _fmt(t.get("roc_auc_bullish")), _fmt(t.get("topk_mean_net_return"), pct=True), _fmt(t.get("ic_mean")),
              metrics["seconds_total"], " | ".join(metrics["verdict"]), extra={"persist": True})
     return {"model": model, "version": version, "test": t, "baselines": metrics["baselines"],
+            "significance": metrics.get("significance", {}),
             "active_model": metrics["active_model"], "verdict": metrics["verdict"], "seconds": metrics["seconds_total"],
             "artifacts_pruned": pruned}
 
@@ -295,13 +343,18 @@ def run_predict(models: list[str], df: pd.DataFrame, cfg: dict, repo, run_id: st
                 rows = cd.latest_ends(panel, spec.seq_len)
                 q_log = T.predict_quantiles(net, spec, panel, Z, rows)
             fc = summarize_quantiles(q_log, levels, cc["bull_threshold"], cc["bear_threshold"])
+            mp = json.loads(latest["params"]) if isinstance(latest.get("params"), str) else (latest.get("params") or {})
+            fc = calibrate_forecasts(fc, mp.get("calibrators"))
+            rule = mp.get("ranking_rule", "prob_bullish")
+            fc["rank_score"] = rank_score(fc, rule)
             frame = pd.DataFrame({"forecast_date": last.strftime("%Y-%m-%d"), "ticker": panel.tickers[rows],
                                   "model_name": model, "model_version": latest["version"], "horizon": h,
                                   **{k: fc[k] for k in ("exp_return", "prob_up", "prob_bullish", "prob_bearish", "vol",
-                                                        "q10", "q50", "q90")},
+                                                        "q10", "q50", "q90", "rank_score")},
                                   "run_id": run_id, "created_at": now_utc()})
             repo.save_model_forecasts(frame)
-            out[model] = {"status": "OK", "version": latest["version"], "n": int(len(frame)), "date": str(last.date())}
+            out[model] = {"status": "OK", "version": latest["version"], "n": int(len(frame)), "date": str(last.date()),
+                          "ranking_rule": rule, "calibrated": sorted(mp.get("calibrators") or {})}
             log.info("Prakiraan %s %s: %d emiten untuk %s", MODEL_LABELS[model], latest["version"], len(frame), last.date(),
                      extra={"persist": True})
         except Exception as e:                                          # satu model gagal tidak menghentikan yang lain
