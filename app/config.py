@@ -17,7 +17,7 @@ from typing import Any
 import yaml
 
 CONFIG_FILES = ["app.yaml", "sources.yaml", "model.yaml", "trading.yaml"]
-OPTIONAL_CONFIG_FILES = ["research.yaml"]   # valuasi / foreign flow / akumulasi (default aman bila tidak ada)
+OPTIONAL_CONFIG_FILES = ["research.yaml", "challengers.yaml"]   # riset & model challenger (default aman bila tidak ada)
 _ENV = re.compile(r"\$\{([A-Z0-9_]+)(?::-([^}]*))?\}")
 ROOT = Path(__file__).resolve().parents[1]
 

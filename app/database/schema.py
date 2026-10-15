@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from app.database.db import Database
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 TYPES = {
     "sqlite": {"ID": "INTEGER PRIMARY KEY AUTOINCREMENT", "TEXT": "TEXT", "INT": "INTEGER", "REAL": "REAL",
@@ -152,6 +152,21 @@ TABLES = [
                        ("last_data_date", "DATE", ""), ("history_rows", "INT", ""), ("run_id", "TEXT", ""),
                        ("created_at", "TS", "")],
      [["scan_date", "stock_id"]], [["scan_date", "status"]]),
+    # Model challenger (app/challengers): registry terpisah dari model_versions agar model aktif tidak terpengaruh.
+    ("challenger_models", [("id", "ID", ""), ("model_name", "TEXT", "NOT NULL"), ("version", "TEXT", "NOT NULL"),
+                           ("status", "TEXT", "NOT NULL"), ("created_at", "TS", ""), ("train_start", "DATE", ""),
+                           ("train_end", "DATE", ""), ("eval_start", "DATE", ""), ("eval_end", "DATE", ""),
+                           ("params", "JSON", ""), ("metrics", "JSON", ""), ("artifact", "BLOB", ""),
+                           ("run_id", "TEXT", ""), ("notes", "TEXT", "")],
+     [["model_name", "version"]], [["model_name", "status"]]),
+    # Prakiraan harian challenger: ±960 emiten × 4 model × ±245 hari ≈ 0,94 jt baris/tahun → retention.model_forecasts_days
+    ("model_forecasts", [("id", "ID", ""), ("forecast_date", "DATE", "NOT NULL"), ("stock_id", "INT", "NOT NULL REFERENCES stocks(id)"),
+                         ("ticker", "TEXT", "NOT NULL"), ("model_name", "TEXT", "NOT NULL"), ("model_version", "TEXT", ""),
+                         ("horizon", "INT", ""), ("exp_return", "REAL", ""), ("prob_up", "REAL", ""),
+                         ("prob_bullish", "REAL", ""), ("prob_bearish", "REAL", ""), ("vol", "REAL", ""),
+                         ("q10", "REAL", ""), ("q50", "REAL", ""), ("q90", "REAL", ""), ("run_id", "TEXT", ""),
+                         ("created_at", "TS", "")],
+     [["forecast_date", "stock_id", "model_name"]], [["forecast_date"], ["model_name", "forecast_date"]]),
     ("schema_migrations", [("version", "INT", "PRIMARY KEY"), ("applied_at", "TS", "")], [], []),
 ]
 
