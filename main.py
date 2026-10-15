@@ -255,6 +255,74 @@ def cmd_rankings(cfg, a):
     return 0
 
 
+# ------------------------------------------------------------------ model challenger (app/challengers)
+def _challenger_models(cfg, arg):
+    from app.challengers import MODEL_NAMES, enabled_models
+    if not arg or arg == "all":
+        return enabled_models(cfg)
+    names = [x.strip().lower() for x in arg.split(",") if x.strip()]
+    bad = [n for n in names if n not in MODEL_NAMES]
+    if bad:
+        raise SystemExit(f"Model tidak dikenal: {bad}. Pilihan: {', '.join(MODEL_NAMES)}")
+    return names
+
+
+def cmd_challenger_prepare(cfg, a):
+    from app.challengers.runner import prepare_dataset, save_dataset_npz
+    ctx = _ctx(cfg)
+    df = prepare_dataset(cfg, ctx.repo)
+    save_dataset_npz(df, a.out)
+    print(f"Dataset challenger: {len(df)} baris, {df['ticker'].nunique()} emiten, {df['date'].min().date()}..{df['date'].max().date()} → {a.out}")
+    return 0
+
+
+def cmd_challenger_train(cfg, a):
+    from app.challengers import MODEL_LABELS
+    from app.challengers.runner import load_dataset_npz, prepare_dataset, run_train
+    from app.pipeline.context import PipelineRun
+    ctx = _ctx(cfg)
+    df = load_dataset_npz(a.dataset) if a.dataset else prepare_dataset(cfg, ctx.repo)
+    rc = 0
+    for model in _challenger_models(cfg, a.model):
+        with PipelineRun(ctx, f"challenger_{model}") as run:
+            out = run_train(model, df, cfg, ctx.repo, run.run_id)
+            run.stats["model_version"] = out["version"]
+            run.stats["summary"] = {k: v for k, v in out.items() if k != "model"}
+        t = out["test"]
+        print(f"\n{MODEL_LABELS[model]} {out['version']} — test {t.get('eval_start')}..{t.get('eval_end')} (n={t.get('n')})")
+        for k in ("roc_auc_bullish", "log_loss", "ece_bullish", "topk_mean_net_return", "ic_mean", "ic_t", "auc_up",
+                  "coverage_80", "vol_rank_corr"):
+            v = t.get(k)
+            print(f"  {k:<22} {'n/a' if v is None else (f'{v:+.2%}' if 'return' in k else f'{v:.4f}')}")
+        for line in out["verdict"]:
+            print(f"  - {line}")
+    return rc
+
+
+def cmd_challenger_predict(cfg, a):
+    from app.challengers import challenger_cfg
+    from app.challengers.runner import prepare_dataset, run_predict
+    from app.pipeline.context import PipelineRun
+    ctx = _ctx(cfg)
+    models = _challenger_models(cfg, a.models)
+    with PipelineRun(ctx, "challenger_predict") as run:
+        df = prepare_dataset(cfg, ctx.repo, challenger_cfg(cfg)["predict_lookback_days"], labels=False)
+        out = run_predict(models, df, cfg, ctx.repo, run.run_id)
+        run.stats["summary"] = out
+        if any(v["status"] == "FAILED" for v in out.values()):
+            run.status = "PARTIAL_SUCCESS"
+    for m, v in out.items():
+        print(f"{m:<12} {v['status']:<9} {v.get('version', '')} {v.get('n', '')} {v.get('date', '')} {v.get('detail', '')}")
+    return 1 if out and all(v["status"] == "FAILED" for v in out.values()) else 0
+
+
+def cmd_challenger_report(cfg, a):
+    from app.challengers.report import comparison_table
+    t = comparison_table(_ctx(cfg).repo)
+    print(t.to_string(index=False) if len(t) else "Belum ada model challenger terlatih.")
+    return 0
+
+
 def cmd_sectors_update(cfg, a):
     from app.data.universe import UniverseManager
     ctx = _ctx(cfg)
@@ -345,6 +413,15 @@ def build_parser():
     s = sub.add_parser("rankings", help="ranking riset terintegrasi"); s.add_argument("--date"); s.add_argument("--top", type=int, default=20)
     s.add_argument("--ranking", default="integrated", choices=["best_value", "quality_value", "accumulation", "foreign_buying",
                    "swing_setup", "value_accumulation", "value_swing", "momentum_flow", "integrated"]); s.set_defaults(fn=cmd_rankings)
+    s = sub.add_parser("challenger-prepare", help="bangun dataset challenger sekali (npz, tanpa pickle)")
+    s.add_argument("--out", default="challenger_dataset.npz"); s.set_defaults(fn=cmd_challenger_prepare)
+    s = sub.add_parser("challenger-train", help="latih & evaluasi model challenger (lstm, gru, tft, arima_garch)")
+    s.add_argument("--model", default="all"); s.add_argument("--dataset", help="npz dari challenger-prepare")
+    s.set_defaults(fn=cmd_challenger_train)
+    s = sub.add_parser("challenger-predict", help="prakiraan harian semua model challenger READY")
+    s.add_argument("--models", default="all"); s.set_defaults(fn=cmd_challenger_predict)
+    s = sub.add_parser("challenger-report", help="perbandingan challenger vs model aktif vs baseline")
+    s.set_defaults(fn=cmd_challenger_report)
     s = sub.add_parser("sectors-update", help="isi sektor emiten yang kosong (Yahoo), antrean berputar")
     s.add_argument("--limit", type=int, default=1000); s.set_defaults(fn=cmd_sectors_update)
     s = sub.add_parser("fundamentals-update"); s.add_argument("--tickers", help="BBCA,TLKM (default: incremental)"); s.add_argument("--date")

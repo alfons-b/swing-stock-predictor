@@ -181,6 +181,66 @@ class Repository:
         return self.db.query_df("SELECT scan_date, ticker, status, reason, last_data_date, history_rows, run_id "
                                 "FROM scan_coverage WHERE scan_date = ? ORDER BY status, ticker", (d,))
 
+    # ================================================================ challenger models (app/challengers)
+    def save_challenger_model(self, row: dict) -> None:
+        r = dict(row)
+        for k in ("params", "metrics"):
+            if k in r and not isinstance(r[k], (str, type(None))):
+                r[k] = _json(r[k])
+        self.db.upsert("challenger_models", [r], keys=["model_name", "version"], count=False)
+
+    def challenger_models(self, model_name: str | None = None, with_artifact: bool = False) -> pd.DataFrame:
+        cols = "model_name, version, status, created_at, train_start, train_end, eval_start, eval_end, params, metrics, " \
+               "run_id, notes" + (", artifact" if with_artifact else "")
+        sql = f"SELECT {cols} FROM challenger_models" + (" WHERE model_name = ?" if model_name else "") + \
+            " ORDER BY model_name, created_at DESC"
+        return self.db.query_df(sql, (model_name,) if model_name else ())
+
+    def latest_challenger(self, model_name: str) -> dict | None:
+        """Versi READY terbaru (dengan artifact) untuk satu model."""
+        df = self.db.query_df("SELECT model_name, version, status, params, metrics, artifact, train_end FROM challenger_models "
+                              "WHERE model_name = ? AND status = ? AND artifact IS NOT NULL ORDER BY created_at DESC LIMIT 1",
+                              (model_name, "READY"))
+        return df.iloc[0].to_dict() if len(df) else None
+
+    def next_challenger_version(self, model_name: str) -> str:
+        n = int(self.db.scalar("SELECT COUNT(*) FROM challenger_models WHERE model_name = ?", (model_name,)) or 0)
+        return f"{model_name}_v{n + 1:03d}"
+
+    def prune_challenger_artifacts(self, model_name: str, keep: int) -> int:
+        """Hapus artifact lama (metrik & registry tetap). Menyisakan `keep` artifact terbaru."""
+        rows = self.db.query("SELECT version FROM challenger_models WHERE model_name = ? AND artifact IS NOT NULL "
+                             "ORDER BY created_at DESC", (model_name,))
+        old = [r[0] for r in rows[keep:]]
+        for v in old:
+            self.db.execute("UPDATE challenger_models SET artifact = NULL, status = ? WHERE model_name = ? AND version = ?",
+                            ("ARCHIVED", model_name, v))
+        return len(old)
+
+    def save_model_forecasts(self, df: pd.DataFrame) -> tuple[int, int]:
+        if df is None or df.empty:
+            return 0, 0
+        ids = self.stock_ids()
+        d = df.assign(stock_id=df["ticker"].map(ids))
+        d = d[d["stock_id"].notna()]
+        cols = ["forecast_date", "stock_id", "ticker", "model_name", "model_version", "horizon", "exp_return", "prob_up",
+                "prob_bullish", "prob_bearish", "vol", "q10", "q50", "q90", "run_id", "created_at"]
+        return self.db.upsert("model_forecasts", d.reindex(columns=cols), keys=["forecast_date", "stock_id", "model_name"],
+                              count=False)
+
+    def model_forecasts(self, forecast_date: str | None = None, model_name: str | None = None,
+                        since: str | None = None) -> pd.DataFrame:
+        where, params = [], []
+        if forecast_date:
+            where.append("forecast_date = ?"); params.append(forecast_date)
+        if since:
+            where.append("forecast_date >= ?"); params.append(since)
+        if model_name:
+            where.append("model_name = ?"); params.append(model_name)
+        sql = "SELECT forecast_date, ticker, model_name, model_version, horizon, exp_return, prob_up, prob_bullish, " \
+              "prob_bearish, vol, q10, q50, q90 FROM model_forecasts" + (" WHERE " + " AND ".join(where) if where else "")
+        return self.db.query_df(sql + " ORDER BY forecast_date, model_name, ticker", params, parse_dates=["forecast_date"])
+
     # ================================================================ predictions
     def save_predictions(self, df: pd.DataFrame) -> tuple[int, int]:
         return self.db.upsert("predictions", df, keys=["prediction_date", "stock_id", "model_version"])

@@ -25,6 +25,7 @@ retention:                                     # `python main.py db-maintenance`
   price_history_years: 7                       # harus >= data.initial_history_years dan >= 5 (walk-forward)
   model_artifacts_keep: 3                      # file model selain ACTIVE yang disimpan; registry & metrik tetap
   scan_coverage_days: 120                      # status cakupan per emiten (ringkasan per run disimpan selamanya)
+  model_forecasts_days: 180                    # prakiraan harian model challenger (metrik evaluasi disimpan selamanya)
 
 coverage:                                      # app/scanner/coverage.py — status per emiten setiap scan
   # Papan yang eksekusinya tidak dimodelkan backtest → EXCLUDED (tidak pernah BUY). Nilai sesuai kolom

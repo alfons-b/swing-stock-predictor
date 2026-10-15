@@ -108,7 +108,7 @@ if _banner:
         st.stop()
 
 PAGES = ["Market Overview", "Full-Market Coverage", "Top Swing Stocks", "Sector Strength", "Stock Detail", "Undervalued Screener", "Foreign Flow",
-         "Accumulation / Distribution", "Integrated Research", "Prediction History", "Backtest", "Model Performance",
+         "Accumulation / Distribution", "Integrated Research", "Prediction History", "Backtest", "Model Performance", "Model Lab",
          "Pipeline Status", "Data Health"]
 page = st.sidebar.radio("Halaman", PAGES)
 st.sidebar.caption("Analytical decision support — bukan jaminan profit. Bukan nasihat investasi.")
@@ -332,6 +332,79 @@ elif page == "Model Performance":
             st.subheader("Walk-forward per fold")
             st.dataframe(pd.DataFrame(m["folds"]), hide_index=True, use_container_width=True)
             st.json({k: m.get(k) for k in ("auc_mean", "auc_std", "ece_bullish", "positive_fold_ratio", "head_to_head", "test_sealed")})
+
+elif page == "Model Lab":
+    from app.challengers import MODEL_LABELS, challenger_cfg
+    from app.challengers.report import comparison_table, live_evaluation
+    st.title("Model Lab — LSTM · GRU · ARIMA-GARCH · TFT")
+    st.caption("Model challenger berjalan TERPISAH: tidak memengaruhi keputusan BUY/WAIT. Metrik di bawah dihitung pada "
+               "periode test tersegel dengan label, biaya, dan definisi yang sama dengan model aktif.")
+
+    @st.cache_data(ttl=600)
+    def _table():
+        return comparison_table(ctx().repo)
+
+    try:
+        t = _table()
+    except Exception as e:
+        st.error(f"Tabel challenger belum bisa dibaca ({type(e).__name__}). Jalankan workflow Challenger Train sekali.")
+        st.stop()
+    if t.empty:
+        st.info("Belum ada model challenger terlatih. Jalankan Actions → Challenger Train → Run workflow.")
+        st.stop()
+    st.subheader("Perbandingan out-of-sample")
+    st.dataframe(t.style.format({c_: "{:.3f}" for c_ in ("AUC bullish", "log loss", "ECE", "IC harian", "IC t", "AUC naik",
+                                                        "cakupan 80%")} | {"top-k net": "{:+.2%}"}, na_rep="–"),
+                 hide_index=True, use_container_width=True)
+    st.caption("top-k net = rata-rata return 5 hari top-5 saham per hari setelah biaya round-trip (definisi model aktif). "
+               "IC harian = korelasi peringkat prakiraan vs return aktual antar-emiten. Cakupan 80% ideal ≈ 0,80.")
+    reg = q("SELECT model_name, version, created_at, metrics FROM challenger_models ORDER BY created_at DESC")
+    for name in reg["model_name"].unique():
+        r = reg[reg["model_name"] == name].iloc[0]
+        m = jl(r["metrics"])
+        with st.expander(f"{MODEL_LABELS.get(name, name)} {r['version']} — kesimpulan"):
+            for line in (m.get("verdict") or []):
+                st.markdown(f"- {line}")
+            st.caption(f"Dilatih {str(r['created_at'])[:16]} · waktu {m.get('seconds_total', '–')} detik")
+
+    d = c.db.scalar("SELECT MAX(forecast_date) FROM model_forecasts")
+    if d:
+        d = str(d)[:10]
+        st.subheader(f"Prakiraan terbaru — {d}")
+        f = q("SELECT ticker, model_name, exp_return, prob_up, prob_bullish, prob_bearish, vol, q10, q90 "
+              "FROM model_forecasts WHERE forecast_date = ?", (d,))
+        mdl = st.selectbox("Model", sorted(f["model_name"].unique()), format_func=lambda x: MODEL_LABELS.get(x, x))
+        top = f[f["model_name"] == mdl].sort_values("prob_bullish", ascending=False).head(25)
+        st.dataframe(top.drop(columns=["model_name"]), hide_index=True, use_container_width=True)
+        tk = st.selectbox("Bandingkan semua model untuk satu saham", sorted(f["ticker"].unique()))
+        cmp_ = f[f["ticker"] == tk].assign(model=lambda x: x["model_name"].map(MODEL_LABELS))
+        act = q("SELECT prob_bullish, expected_return FROM predictions WHERE ticker = ? ORDER BY prediction_date DESC LIMIT 1", (tk,))
+        if len(act):
+            cmp_ = pd.concat([cmp_, pd.DataFrame([{"model": "Model aktif", "prob_bullish": act["prob_bullish"].iloc[0],
+                                                    "exp_return": act["expected_return"].iloc[0]}])])
+        st.dataframe(cmp_[["model", "exp_return", "prob_up", "prob_bullish", "prob_bearish", "vol", "q10", "q90"]],
+                     hide_index=True, use_container_width=True)
+
+        st.subheader("Evaluasi live (prakiraan yang horizonnya sudah lewat)")
+        cc = challenger_cfg(c.cfg)
+        since = (pd.Timestamp(d) - pd.Timedelta(days=200)).strftime("%Y-%m-%d")
+        fc_all = q("SELECT forecast_date, ticker, model_name, exp_return, prob_bullish, q10, q90 FROM model_forecasts "
+                   "WHERE forecast_date >= ?", (since,))
+        if len(fc_all):
+            fc_all["forecast_date"] = pd.to_datetime(fc_all["forecast_date"])
+            px = q("SELECT s.ticker, p.date, p.close FROM price_history p JOIN stocks s ON s.id = p.stock_id WHERE p.date >= ?",
+                   (since,))
+            px["date"] = pd.to_datetime(px["date"])
+            px["close"] = pd.to_numeric(px["close"])
+            live = live_evaluation(fc_all, px, cc["horizon"], cc["bull_threshold"])
+            if live.empty:
+                st.info(f"Belum ada prakiraan yang berumur ≥ {cc['horizon']} hari bursa.")
+            else:
+                st.dataframe(live, hide_index=True, use_container_width=True)
+                st.caption("Out-of-sample sungguhan: prakiraan dibuat sebelum hasilnya diketahui. Butuh puluhan hari "
+                           "sebelum angka ini bermakna.")
+    else:
+        st.info("Belum ada prakiraan harian. Workflow Challenger Predict berjalan otomatis setelah Daily Market Pipeline.")
 
 elif page == "Pipeline Status":
     st.title("Pipeline runs")

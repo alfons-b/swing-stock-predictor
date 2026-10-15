@@ -77,6 +77,8 @@ run berikutnya menunggu, tidak dibatalkan.
 | Weekly Backtest | `weekly_backtest.yml` | Min 08:00 | `0 1 * * 0` | walk-forward + track record live + evaluasi modul riset |
 | Database Maintenance | `db_maintenance.yml` | tgl 1, 09:00 | `0 2 1 * *` | retensi + VACUUM (opsi dry-run / FULL) |
 | Initial Setup | `setup.yml` | manual | — | migrasi, universe, histori 6 tahun, model awal, backtest |
+| Challenger Train | `challenger_train.yml` | Sab 12:37 | `37 5 * * 6` | latih & evaluasi LSTM, GRU, ARIMA-GARCH, TFT (paralel) → `challenger_models` |
+| Challenger Predict | `challenger_predict.yml` | setelah Daily sukses | `workflow_run` | prakiraan harian 4 model → `model_forecasts` |
 | Tests | `tests.yml` | setiap push / PR | — | ruff (error nyata) + pytest di SQLite **dan** PostgreSQL 16 |
 
 ### Pemetaan ke workflow pada spesifikasi

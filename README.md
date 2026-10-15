@@ -211,6 +211,7 @@ Variabel di `.env` **tidak** dibaca otomatis. Set lewat shell, atau jalankan `do
 | `python main.py rankings --ranking best_value` | Salah satu dari 9 ranking riset terintegrasi |
 | `python main.py valuation` / `fundamentals-update` / `fundamentals-template` / `foreign-flow-update` | Modul riset terpisah |
 | `python main.py evaluate-modules` | Evaluasi historis 9 varian + IC faktor (metode: `docs/ARCHITECTURE.md`) |
+| `python main.py challenger-train --model lstm\|gru\|tft\|arima_garch` / `challenger-predict` / `challenger-report` | Model challenger terpisah (butuh `requirements-models.txt` + torch CPU; lihat `docs/CHALLENGER_MODELS.md`) |
 | `--as-of YYYY-MM-DD` | Simulasi tanggal (untuk test dan backfill) |
 
 Kode keluar (exit code):
@@ -323,6 +324,7 @@ app/
   flows/         foreign flow (lembar ≠ nilai), fitur 5/20/60H, skor & status
   accumulation/  OBV/ADL/CMF/MFI/RVOL/CLV/VWAP, skor akumulasi, distribusi, tahap, antarmuka broker summary
   research/      skor terpisah + 9 ranking, orkestrasi daily, STOCK RESEARCH REPORT, evaluasi, data dashboard
+  challengers/   model challenger LSTM · GRU · ARIMA-GARCH · TFT (terpisah dari model aktif; docs/CHALLENGER_MODELS.md)
   storage/       ModelStorage & ReportStorage (local / database; Supabase Storage = legacy, tidak dipakai)
   reporting/     CSV, HTML, Markdown harian
   notifications/ Telegram / webhook (opsional)

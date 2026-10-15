@@ -53,6 +53,17 @@ Status:
 | 17 | Reporting Engine | `app/reporting/` (CSV, HTML, Markdown), `storage/report_storage.py` | TESTED | `test_daily_pipeline` |
 | 18 | Cloud Scheduler & Monitoring | `.github/workflows/`, `pipeline/context.py` (pipeline_runs, system_logs), `pipeline/health.py` | IMPLEMENTED: logika diuji; eksekusi workflow hanya bisa diverifikasi di GitHub | `test_daily_pipeline`, `test_database_providers` |
 
+## Model challenger (LSTM, GRU, ARIMA-GARCH, TFT)
+
+Paket `app/challengers/` berisi empat model challenger, dirinci di [CHALLENGER_MODELS.md](CHALLENGER_MODELS.md).
+Paket ini terpisah dari model aktif:
+- tabel sendiri: `challenger_models` dan `model_forecasts`;
+- workflow sendiri: `challenger_train.yml` (mingguan) dan `challenger_predict.yml` (setelah Daily);
+- dependensi sendiri: `requirements-models.txt` dan torch CPU.
+
+Challenger tidak memengaruhi keputusan BUY/WAIT. Evaluasinya memakai label, fold test, biaya, dan metrik yang sama
+dengan model aktif. Status: `TESTED` (`test_challengers_core`, `test_challengers_models` di CI dengan library asli).
+
 ## Cakupan pemindaian (baru)
 
 `app/scanner/coverage.py` memberi setiap emiten aktif tepat satu status per tanggal scan:

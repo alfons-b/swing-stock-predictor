@@ -93,6 +93,7 @@ def _cutoffs(cfg: dict, today: pd.Timestamp) -> dict:
         "foreign_flow": (today - pd.DateOffset(years=int(get(cfg, "research_retention.foreign_flow_years", 7))))
         .strftime("%Y-%m-%d"),
         "coverage": (today - pd.Timedelta(days=int(r.get("scan_coverage_days", 120)))).strftime("%Y-%m-%d"),
+        "forecasts": (today - pd.Timedelta(days=int(r.get("model_forecasts_days", 180)))).strftime("%Y-%m-%d"),
     }
 
 
@@ -147,6 +148,9 @@ def _plan(cfg: dict, db: Database, today: pd.Timestamp) -> list[dict]:
         {"name": f"foreign flow sebelum {c['foreign_flow']}", "table": "foreign_flow_history",
          "count": "SELECT COUNT(*) FROM foreign_flow_history WHERE date < ?",
          "sql": "DELETE FROM foreign_flow_history WHERE date < ?", "params": [c["foreign_flow"]]},
+        {"name": f"prakiraan model challenger sebelum {c['forecasts']}", "table": "model_forecasts",
+         "count": "SELECT COUNT(*) FROM model_forecasts WHERE forecast_date < ?",
+         "sql": "DELETE FROM model_forecasts WHERE forecast_date < ?", "params": [c["forecasts"]]},
         {"name": f"cakupan scan per emiten sebelum {c['coverage']}", "table": "scan_coverage",
          "count": "SELECT COUNT(*) FROM scan_coverage WHERE scan_date < ?",
          "sql": "DELETE FROM scan_coverage WHERE scan_date < ?", "params": [c["coverage"]]},
