@@ -79,7 +79,34 @@ Pembanding pada baris yang sama: baseline momentum (`f_roc10`), reversal (kebali
 3. **Produksi**: latih s/d label terakhir. Artifact ini dipakai untuk prakiraan harian.
 
 Hasil, kesimpulan, dan versi tersimpan di `challenger_models.metrics`. Contoh kesimpulan: "top-k net −0,4% vs
-baseline reversal +0,1% → TIDAK lebih baik".
+baseline reversal +0,1% → perbedaan TIDAK signifikan".
+
+### Lapisan validasi: kalibrasi dan aturan ranking (sejak schema v7)
+Keduanya dipasang **hanya** dari prakiraan fold validasi (model tahap seleksi; ARIMA-GARCH: parameter diestimasi
+s/d akhir training validasi). Periode test tidak dipakai untuk memilih atau menyetel apa pun.
+
+- **Kalibrasi Platt** (`app/challengers/calibration.py`) untuk `prob_bullish`, `prob_bearish`, `prob_up`:
+  `P = σ(a·logit(p) + b)`, minimal 200 baris dan dua kelas. Pemetaannya monoton, jadi AUC dan urutan tidak berubah.
+  Yang membaik adalah ECE dan log loss. Test melaporkan nilai sesudah (`ece_bullish`) dan sebelum kalibrasi
+  (`ece_bullish_raw`). Kalibrator ikut tersimpan di `params` dan diterapkan pada prakiraan harian. Model lama
+  tanpa kalibrator tetap berjalan seperti sebelumnya.
+- **Aturan ranking top-5** dipilih dari `prob_bullish`, `exp_return`, `risk_adjusted` (= return harapan / σ, tidak
+  bias ke saham paling volatil), dan `prob_up`. Yang dipilih adalah aturan dengan top-k net tertinggi **di validasi**.
+  Hasil test aturan itu dilaporkan sebagai `topk_by_rule_net`, dan skornya disimpan di `model_forecasts.rank_score`.
+  Aturan yang dipilih pada satu run mingguan bisa berbeda dengan run berikutnya. Itu wajar dan tercatat di metrik.
+
+### Uji signifikansi (bootstrap blok per tanggal)
+Return 5 hari saling bertumpuk antar hari, sehingga bootstrap biasa akan terlalu optimistis. Karena itu dipakai
+*moving-block bootstrap* dengan blok sepanjang horizon (5 hari bursa) dan 2000 ulangan pada deret harian:
+- top-k net per hari (aturan terpilih): CI 95% dan p-value untuk H0 "rata-rata ≤ 0";
+- IC harian: CI 95% dan p-value untuk H0 "IC ≤ 0";
+- selisih **berpasangan** per hari terhadap baseline momentum dan reversal (hari yang sama, emiten yang sama);
+- model aktif: prediksi test-nya tidak tersimpan per baris, jadi pembandingnya hanya kasar, yaitu apakah angka
+  model aktif berada di luar CI challenger. Ini dicatat eksplisit di kesimpulan.
+
+Kesimpulan memakai kata "lebih baik secara SIGNIFIKAN", "lebih BURUK secara signifikan", atau "perbedaan TIDAK
+signifikan". Selama CI top-k net masih mencakup 0, kesimpulan selalu menyatakan model **belum layak untuk keputusan
+transaksi**. Jika data test terlalu pendek (< 10 hari), CI tidak dihitung dan dilaporkan sebagai tidak tersedia.
 
 ### Prakiraan harian
 Workflow **Challenger Predict** berjalan otomatis **setelah** Daily Market Pipeline sukses (`workflow_run`), jadi
@@ -94,7 +121,8 @@ sungguhan, tetapi butuh puluhan hari bursa sebelum bermakna.
 
 Tidak otomatis. Syarat minimal yang disarankan sebelum mempertimbangkan promosi:
 1. Lebih baik dari model aktif **dan** dari baseline momentum/reversal pada top-k net return setelah biaya, di periode
-   test **dan** di evaluasi live minimal 60 hari bursa.
+   test **dan** di evaluasi live minimal 60 hari bursa. Di test, selisih terhadap baseline harus signifikan
+   (bootstrap blok) dan CI 95% top-k net tidak boleh mencakup 0.
 2. AUC bullish ≥ 0,52 dan ECE ≤ 0,06 (gerbang promosi model aktif).
 3. Cakupan interval 80% antara 0,70 dan 0,90 (kalibrasi distribusi).
 4. Konsisten di beberapa run mingguan, bukan satu run yang kebetulan bagus.
