@@ -9,7 +9,7 @@ challengers:
   min_history_days: 300          # emiten dengan histori lebih pendek tidak diprakirakan
   target_clip: 0.5               # |log return 5H| dipotong (artefak corporate action / data rusak)
   baseline_feature: f_roc10      # baseline momentum (dan kebalikannya sebagai baseline reversal)
-  predict_lookback_days: 420     # daily predict: hari bursa yang dimuat (warmup fitur 260 + jendela sekuens)
+  predict_lookback_days: 400     # daily predict: fitur terpanjang ±270 hari (persentil vol IHSG 250H) + jendela 60 + margin
   artifacts_keep: 2              # artifact per model yang disimpan (selain terbaru); metrik disimpan selamanya
 
   sequence:                      # dipakai LSTM, GRU, TFT

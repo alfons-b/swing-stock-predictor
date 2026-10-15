@@ -67,6 +67,12 @@ berikutnya adalah pada data dan evaluasi, bukan menulis ulang strategi.
 
 Hasil: **182 test lulus, 1 dilewati** (PostgreSQL; berjalan di CI).
 
+## Model challenger (15 Okt 2026)
+
+Empat model challenger diimplementasikan tanpa mengubah model aktif: LSTM, GRU, ARIMA-GARCH, dan TFT. Detailnya di
+[CHALLENGER_MODELS.md](CHALLENGER_MODELS.md). Status `TESTED` di CI dengan torch, statsmodels, dan arch asli, termasuk
+training end-to-end pada data contoh dan test train/serve skew. Run produksi pertama: Actions → Challenger Train.
+
 ## Instruksi untuk sesi berikutnya
 
 1. **Pengguna:** ikuti CLOUD_OPERATIONS §7 (Neon → secret → Initial Setup → Database Health Check → Daily).

@@ -190,6 +190,24 @@ class TestEndToEnd(unittest.TestCase):
         after = self.ctx.db.query_df("SELECT version, status, artifact FROM model_versions ORDER BY version")
         pd.testing.assert_frame_equal(self.active_before, after)       # model aktif tidak berubah sedikit pun
 
+    def test_no_train_serve_skew_in_features(self):
+        """Fitur pada tanggal terakhir dari dataset prakiraan harian (lookback terbatas) == dari histori penuh."""
+        from app.challengers import challenger_cfg
+        from app.challengers import data as cd
+        from app.challengers.runner import prepare_dataset
+        lb = challenger_cfg(self.cfg)["predict_lookback_days"]
+        recent = prepare_dataset(self.cfg, self.ctx.repo, lb, labels=False)
+        feats = cd.select_sequence_features(self.df, np.ones(len(self.df), bool), 64, 0.6, self.cfg)
+        full = cd.prepare_panel(self.df, feats, 5)
+        part = cd.prepare_panel(recent, feats, 5)
+        L = 60
+        e_full, e_part = cd.latest_ends(full, L), cd.latest_ends(part, L)
+        self.assertEqual(list(full.tickers[e_full]), list(part.tickers[e_part]))
+        w_full, w_part = full.X[cd.window_index(e_full, L)], part.X[cd.window_index(e_part, L)]
+        both = np.isfinite(w_full) & np.isfinite(w_part)
+        self.assertTrue((np.isfinite(w_full) == np.isfinite(w_part)).all(), "NaN berbeda → lookback kurang panjang")
+        np.testing.assert_allclose(w_part[both], w_full[both], rtol=1e-4, atol=1e-5)
+
     def test_daily_pipeline_still_works(self):
         from app.pipeline.jobs import job_daily
         from tests.helpers import make_ctx

@@ -269,3 +269,30 @@ class TestDatasetNpz(unittest.TestCase):
         self.assertEqual(back["is_tradeable"].tolist(), df["is_tradeable"].tolist())
         np.testing.assert_allclose(back["close"], df["close"], rtol=1e-6)
         self.assertEqual(back["date"].iloc[3], df["date"].iloc[3])
+
+
+import os  # noqa: E402
+
+
+@unittest.skipUnless(os.environ.get("TEST_POSTGRES_URL"), "butuh TEST_POSTGRES_URL")
+class TestRegistryAndReportPostgres(TestRegistryAndReport):
+    """Registry & prakiraan di PostgreSQL sungguhan (artifact BYTEA, JSON TEXT, DATE)."""
+
+    def setUp(self):
+        from app.database.db import Database
+        from app.database.schema import TABLE_NAMES
+        from tests.helpers import make_cfg, make_ctx
+        db = Database.from_url(os.environ["TEST_POSTGRES_URL"])
+        db.executescript([f"DROP TABLE IF EXISTS {t} CASCADE" for t in reversed(TABLE_NAMES)])
+        db.close()
+        self.ctx = make_ctx(make_cfg(db_url=os.environ["TEST_POSTGRES_URL"]))
+        self.ctx.repo.upsert_stocks(pd.DataFrame({"ticker": ["AAAA", "BBBB"], "is_active": True}))
+
+    def test_binary_artifact_roundtrip(self):
+        from app.challengers import arima_garch as ag
+        blob = ag.to_artifact({"AAAA": {"status": "OK", "mu": 0.1, "ar": [0.2], "ma": []}}, {"horizon": 5})
+        self.ctx.repo.save_challenger_model({"model_name": "arima_garch", "version": "arima_garch_v001", "status": "READY",
+                                             "created_at": "2026-10-15T00:00:00+00:00", "artifact": blob})
+        got = self.ctx.repo.latest_challenger("arima_garch")
+        params, meta = ag.from_artifact(got["artifact"])
+        self.assertEqual(params["AAAA"]["ar"], [0.2])
