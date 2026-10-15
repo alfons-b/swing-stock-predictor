@@ -109,11 +109,21 @@ def baseline_metrics(ev: pd.DataFrame, cfg: dict, feature_values: np.ndarray | N
     return out
 
 
+def _f(v, spec: str) -> str:
+    """Format aman: None/NaN → 'n/a' (verdict tidak boleh gagal hanya karena satu metrik tidak tersedia)."""
+    try:
+        if v is None or not np.isfinite(float(v)):
+            return "n/a"
+        return format(float(v), spec)
+    except (TypeError, ValueError):
+        return "n/a"
+
+
 def _ci(b: dict | None, pct: bool = True) -> str:
     if not b or b.get("ci_low") is None:
         return ""
-    f = (lambda v: f"{v:+.2%}") if pct else (lambda v: f"{v:+.3f}")
-    return f" [CI95 {f(b['ci_low'])}; {f(b['ci_high'])}, p={b['p_value']:.3f}]"
+    spec = "+.2%" if pct else "+.3f"
+    return f" [CI95 {_f(b['ci_low'], spec)}; {_f(b['ci_high'], spec)}, p={_f(b.get('p_value'), '.3f')}]"
 
 
 def verdict(metrics: dict, baselines: dict, active: dict | None, sig: dict | None = None) -> list[str]:
@@ -124,18 +134,18 @@ def verdict(metrics: dict, baselines: dict, active: dict | None, sig: dict | Non
     msgs = []
     auc = metrics.get("roc_auc_bullish")
     if auc is not None:
-        msgs.append(f"AUC bullish {auc:.3f} ({'di atas' if auc > 0.52 else 'TIDAK di atas'} ambang promosi 0,52); "
-                    f"AUC arah naik {metrics.get('auc_up') or float('nan'):.3f}")
+        msgs.append(f"AUC bullish {_f(auc, '.3f')} ({'di atas' if auc > 0.52 else 'TIDAK di atas'} ambang promosi 0,52); "
+                    f"AUC arah naik {_f(metrics.get('auc_up'), '.3f')}")
     ece, ece_raw = metrics.get("ece_bullish"), metrics.get("ece_bullish_raw")
     if ece is not None:
-        msgs.append(f"ECE {ece:.3f}" + (f" (sebelum kalibrasi {ece_raw:.3f})" if ece_raw is not None and ece_raw != ece else "")
+        msgs.append(f"ECE {_f(ece, '.3f')}" + (f" (sebelum kalibrasi {_f(ece_raw, '.3f')})" if ece_raw is not None and ece_raw != ece else "")
                     + f" → {'lolos' if ece <= 0.06 else 'TIDAK lolos'} syarat ≤ 0,06")
     rule = metrics.get("ranking_rule", "prob_bullish")
     tk_rule = metrics.get("topk_by_rule_net", metrics.get("topk_mean_net_return"))
     if tk_rule is not None:
-        msgs.append(f"Aturan ranking (dipilih di validasi): {rule} → top-k net {tk_rule:+.2%}{_ci(sig.get('topk'))}")
-    if sig.get("ic"):
-        msgs.append(f"IC harian {sig['ic']['mean']:+.3f}{_ci(sig['ic'], pct=False)}")
+        msgs.append(f"Aturan ranking (dipilih di validasi): {rule} → top-k net {_f(tk_rule, '+.2%')}{_ci(sig.get('topk'))}")
+    if sig.get("ic") and sig["ic"].get("mean") is not None:
+        msgs.append(f"IC harian {_f(sig['ic']['mean'], '+.3f')}{_ci(sig['ic'], pct=False)}")
     for name in ("momentum", "reversal"):
         d = sig.get(f"topk_vs_{name}")
         b = (baselines or {}).get(name, {})
@@ -146,17 +156,18 @@ def verdict(metrics: dict, baselines: dict, active: dict | None, sig: dict | Non
                 word = "lebih BURUK secara signifikan"
             else:
                 word = "perbedaan TIDAK signifikan"
-            msgs.append(f"vs baseline {name} ({b.get('topk_mean_net_return', float('nan')):+.2%}): selisih harian "
-                        f"{d['mean']:+.2%}{_ci(d)} → {word}")
+            msgs.append(f"vs baseline {name} ({_f(b.get('topk_mean_net_return'), '+.2%')}): selisih harian "
+                        f"{_f(d.get('mean'), '+.2%')}{_ci(d)} → {word}")
         elif b.get("topk_mean_net_return") is not None and tk_rule is not None:
-            msgs.append(f"vs baseline {name}: {tk_rule:+.2%} vs {b['topk_mean_net_return']:+.2%} (signifikansi tidak tersedia)")
+            msgs.append(f"vs baseline {name}: {_f(tk_rule, '+.2%')} vs {_f(b['topk_mean_net_return'], '+.2%')} "
+                        "(signifikansi tidak tersedia)")
     if active:
         a_tk, a_auc = active.get("topk_mean_net_return"), active.get("roc_auc_bullish")
         tk_pb = metrics.get("topk_mean_net_return")
         if a_tk is not None and tk_pb is not None:
-            auc_txt = f", AUC {auc:.3f} vs {a_auc:.3f}" if auc is not None and a_auc is not None else ""
-            msgs.append(f"vs model aktif ({active.get('version')}), definisi sama (top-k P(bullish)): {tk_pb:+.2%} vs "
-                        f"{a_tk:+.2%}{auc_txt} → {active.get('comparison', 'tidak bisa dinilai')} "
+            auc_txt = f", AUC {_f(auc, '.3f')} vs {_f(a_auc, '.3f')}" if auc is not None and a_auc is not None else ""
+            msgs.append(f"vs model aktif ({active.get('version')}), definisi sama (top-k P(bullish)): {_f(tk_pb, '+.2%')} vs "
+                        f"{_f(a_tk, '+.2%')}{auc_txt} → {active.get('comparison', 'tidak bisa dinilai')} "
                         f"(perbandingan kasar: prediksi test model aktif tidak tersedia untuk uji berpasangan)")
     t = sig.get("topk") or {}
     if t.get("ci_low") is not None and t["ci_low"] > 0:

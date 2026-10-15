@@ -408,3 +408,15 @@ class TestSmallUniverse(unittest.TestCase):
         s = significance(ev, make_cfg(), "exp_return", ev["exp_return"].to_numpy())
         self.assertIsNone(s["ic"]["ci_low"])
         self.assertIsNotNone(s["topk"]["ci_low"])
+
+    def test_verdict_never_fails_on_missing_values(self):
+        from app.challengers.evaluate import verdict
+        m = {"status": "OK", "roc_auc_bullish": 0.55, "auc_up": None, "ece_bullish": None, "ece_bullish_raw": None,
+             "ranking_rule": "exp_return", "topk_by_rule_net": None, "topk_mean_net_return": -0.01}
+        sig = {"topk": {"mean": None, "ci_low": None, "ci_high": None, "p_value": None},
+               "ic": {"mean": None, "ci_low": None, "ci_high": None, "p_value": None},
+               "topk_vs_momentum": {"mean": 0.001, "ci_low": -0.01, "ci_high": 0.01, "p_value": None}}
+        out = verdict(m, {"momentum": {"topk_mean_net_return": None}, "reversal": {"topk_mean_net_return": -0.02}},
+                      {"version": "v", "topk_mean_net_return": 0.01, "roc_auc_bullish": None}, sig)
+        self.assertTrue(out)
+        self.assertTrue(any("n/a" in x for x in out))
