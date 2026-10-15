@@ -203,6 +203,13 @@ class TestEndToEnd(unittest.TestCase):
         L = 60
         e_full, e_part = cd.latest_ends(full, L), cd.latest_ends(part, L)
         self.assertEqual(list(full.tickers[e_full]), list(part.tickers[e_part]))
+        # Emiten yang harganya datar ≥ setahun (suspensi panjang) dikecualikan: RSI Wilder "membeku" pada nilai sebelum
+        # suspensi (up & down meluruh bersama), dan nilai itu bergantung pada histori di luar jendela mana pun.
+        # Emiten seperti ini berstatus cakupan STALE/EXCLUDED dan tidak pernah menjadi sinyal.
+        r_idx = part.features.index("c_ret1")
+        moved = np.array([np.nanmax(np.abs(part.X[max(0, e - 250):e + 1, r_idx])) > 0 for e in e_part])
+        self.assertGreaterEqual(moved.mean(), 0.8)
+        e_full, e_part = e_full[moved], e_part[moved]
         w_full, w_part = full.X[cd.window_index(e_full, L)], part.X[cd.window_index(e_part, L)]
         both = np.isfinite(w_full) & np.isfinite(w_part)
         self.assertTrue((np.isfinite(w_full) == np.isfinite(w_part)).all(), "NaN berbeda → lookback kurang panjang")

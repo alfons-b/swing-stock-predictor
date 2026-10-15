@@ -128,3 +128,6 @@ Tidak otomatis. Syarat minimal yang disarankan sebelum mempertimbangkan promosi:
 - ARIMA-GARCH memakai parameter tetap selama 6 bulan test. Di produksi, parameter diestimasi ulang setiap minggu.
 - Model dilatih dari nol setiap minggu (tanpa warm start) agar hasil bisa direproduksi dan diaudit.
 - Prakiraan 5 hari tidak memperhitungkan ARA/ARB, suspensi mendadak, atau corporate action di masa depan.
+- Train/serve skew diuji: fitur 400 hari terakhir identik dengan fitur dari histori penuh, **kecuali** emiten yang
+  harganya datar ±1 tahun (suspensi panjang). RSI Wilder emiten itu "membeku" pada nilai sebelum suspensi. Emiten seperti
+  ini berstatus cakupan STALE/EXCLUDED, jadi prakiraannya tidak bermakna dan tidak pernah menjadi sinyal.
