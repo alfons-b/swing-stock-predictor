@@ -149,3 +149,32 @@ class TestSectorQueue(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStaleCodeDetection(unittest.TestCase):
+    def _repo(self, head, ref_sha=None, packed=None):
+        import tempfile
+        from pathlib import Path
+        root = Path(tempfile.mkdtemp())
+        (root / ".git" / "refs" / "heads").mkdir(parents=True)
+        (root / ".git" / "HEAD").write_text(head + "\n")
+        if ref_sha:
+            (root / ".git" / "refs" / "heads" / "main").write_text(ref_sha + "\n")
+        if packed:
+            (root / ".git" / "packed-refs").write_text(packed)
+        return root
+
+    def test_reads_loose_packed_and_detached(self):
+        a, b = "a" * 40, "b" * 40
+        self.assertEqual(H.git_commit(self._repo("ref: refs/heads/main", ref_sha=a)), a)
+        self.assertEqual(H.git_commit(self._repo("ref: refs/heads/main", packed=f"# pack\n{b} refs/heads/main\n")), b)
+        self.assertEqual(H.git_commit(self._repo(a)), a)
+        from pathlib import Path
+        self.assertIsNone(H.git_commit(Path("/nonexistent")))
+
+    def test_warning_only_when_commit_changed(self):
+        self.assertIsNone(H.stale_code_warning("a" * 40, "a" * 40))
+        self.assertIsNone(H.stale_code_warning(None, "a" * 40))
+        msg = H.stale_code_warning("b" * 40, "a" * 40)
+        self.assertIn("Reboot app", msg)
+        self.assertIn("bbbbbbb", msg)

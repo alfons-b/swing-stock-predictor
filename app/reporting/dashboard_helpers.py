@@ -9,8 +9,44 @@ Dibuat dari audit dashboard produksi 13 Okt 2026:
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pandas as pd
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def git_commit(root: Path = REPO_ROOT) -> str | None:
+    """SHA commit yang ter-checkout (dibaca langsung dari .git, tanpa menjalankan git). None bila tidak tersedia."""
+    try:
+        head = (root / ".git" / "HEAD").read_text().strip()
+        if not head.startswith("ref:"):
+            return head[:40] or None
+        ref = head.split(" ", 1)[1].strip()
+        f = root / ".git" / ref
+        if f.exists():
+            return f.read_text().strip()[:40] or None
+        packed = root / ".git" / "packed-refs"
+        if packed.exists():
+            for line in packed.read_text().splitlines():
+                if line.endswith(" " + ref):
+                    return line.split(" ", 1)[0][:40]
+    except Exception:
+        return None
+    return None
+
+
+# Commit saat modul aplikasi (app/*) PERTAMA KALI dimuat di proses ini. Streamlit hanya menjalankan ulang
+# dashboard/app.py ketika kode baru masuk; modul app/* yang sudah dimuat tetap versi lama sampai proses di-reboot.
+LOADED_COMMIT = git_commit()
+
+
+def stale_code_warning(current: str | None, loaded: str | None = None) -> str | None:
+    loaded = LOADED_COMMIT if loaded is None else loaded
+    if current and loaded and current != loaded:
+        return (f"Versi kode baru terdeteksi ({current[:7]}), tetapi aplikasi masih memakai modul versi lama "
+                f"({loaded[:7]}). Klik **Manage app → ⋮ → Reboot app** agar semua halaman memakai kode terbaru.")
+    return None
 
 
 # ----------------------------------------------------------------------------------------- database
